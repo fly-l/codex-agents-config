@@ -1,0 +1,4 @@
+interface:
+  display_name: "项目长期记忆"
+  short_description: "按需检索、验证并维护可审计的项目长期记忆与会话候选"
+  default_prompt: "使用 $project-memory 检索或维护当前项目中经过验证的长期记忆。"

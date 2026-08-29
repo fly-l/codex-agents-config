@@ -1,0 +1,34 @@
+{
+  "description": "项目长期记忆：可选的短摘要加载与待审核会话登记。",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CODEX_AGENTS_CONFIG_ROOT/Hook/project_memory_session_start.py\"",
+            "commandWindows": "py -3 \"%CODEX_AGENTS_CONFIG_ROOT%\\Hook\\project_memory_session_start.py\"",
+            "timeout": 3,
+            "statusMessage": "检查项目记忆摘要",
+            "additionalContextLimit": 1500
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "other",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CODEX_AGENTS_CONFIG_ROOT/Hook/project_memory_session_end.py\"",
+            "commandWindows": "py -3 \"%CODEX_AGENTS_CONFIG_ROOT%\\Hook\\project_memory_session_end.py\"",
+            "timeout": 3,
+            "statusMessage": "登记待审核项目记忆"
+          }
+        ]
+      }
+    ]
+  }
+}

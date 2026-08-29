@@ -1,73 +1,139 @@
 # Codex AGENTS 配置
 
-这是一份可复用的 `AGENTS.md` 配置模板，用于统一 Codex 的回复风格、项目知识管理和多代理协作方式。
+这是一套可复用的 Codex 配置，包含精简的运行时 `AGENTS.md`、按需加载的项目记忆 Skill，以及基于生命周期事件的 Hook。
 
-## 主要功能
+## 设计目标
 
-- 统一使用简体中文回复和代码注释。
-- 使用 Obsidian 构建项目长期记忆，按索引页、模块笔记和专题笔记组织知识。
-- 规定会话开始、信息检索、关键知识写入和会话总结流程。
-- 约束多代理任务拆分、文件所有权、冲突控制和最终验收。
-- 对架构决策、技术选型、Bug 修复、API 用法和环境配置采用结构化记录。
+- 全局 `AGENTS.md` 只保留必须始终生效的路由与约束。
+- 项目记忆默认延迟召回，不在每次会话开始时读取整个知识库。
+- 正式记录使用稳定 ID、状态、来源、验证日期和内容指纹。
+- 写入采用原子化 upsert，不使用盲目 `append`，不手工制造反向链接。
+- Hook 只登记待审核会话；聊天内容不会未经验证直接成为权威记忆。
+- 保留原有多代理委派、冲突控制与验收规则。
 
-## 使用方法
+## 目录
 
-1. 下载仓库中的 [`AGENTS.md`](./AGENTS.md)。
-2. 将文件放到 Codex 能识别的全局或项目配置位置。
-3. 在具体项目的 `AGENTS.md` 中补充项目配置：
+```text
+.
+├── AGENTS.md
+├── Skills/
+│   └── project-memory/
+│       ├── SKILL.md
+│       ├── references/schema.md
+│       └── scripts/memory_store.py
+└── Hook/
+    ├── hooks.json
+    ├── install.py
+    ├── project_memory_common.py
+    ├── project_memory_session_start.py
+    └── project_memory_session_end.py
+```
 
-   ```markdown
-   # 项目：示例项目
+## 1. 安装 AGENTS 配置
 
-   ## 知识体系
-   - 启用：是
-   - 项目名称：示例项目
-   ```
+将根目录的 `AGENTS.md` 放入 Codex 全局配置目录。Codex 默认使用 `~/.codex/AGENTS.md`；也可以将需要的部分放入具体项目。
 
-4. 在本地将 `{Obsidian Vault 根目录}` 配置为自己的 Obsidian Vault 位置。
-5. 启动 Obsidian，并确保 `obsidian` CLI 可以正常调用。
+项目级 `AGENTS.md` 增加：
 
-如果不需要 Obsidian 长记忆，将项目配置中的 `启用` 改为 `否` 即可。
+```markdown
+## 知识体系
+- 启用：是
+- 项目名称：示例项目
+- 自动加载：否
+- 自动收集：是
+```
 
-## Obsidian 知识库结构
+`自动加载：否` 是推荐值：只有任务需要历史信息时才调用 Skill。改成 `是` 后，SessionStart Hook 会注入最多约 4,000 字符的 `当前状态.md`。
 
-启用后，每个项目会维护以下核心内容：
+## 2. 配置 Vault 路径
+
+推荐使用环境变量，不要把个人路径提交到公开仓库：
+
+```powershell
+$env:CODEX_MEMORY_VAULT = "D:\ObsidianNoteHub\项目代码"
+```
+
+也可以在私有的项目级 `AGENTS.md` 的 `知识体系` 章节设置：
+
+```markdown
+- Vault根目录：D:\ObsidianNoteHub\项目代码
+```
+
+环境变量的优先级更高。
+
+## 3. 安装 project-memory Skill
+
+将 `Skills/project-memory` 复制到 Codex Skills 目录。Windows PowerShell 示例：
+
+```powershell
+$codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { "$HOME\.codex" }
+New-Item -ItemType Directory -Force "$codexHome\skills" | Out-Null
+Copy-Item -Recurse -Force ".\Skills\project-memory" "$codexHome\skills\project-memory"
+```
+
+安装后可通过 `$project-memory` 显式调用；当任务明确依赖项目历史或产生持久事实时也可自动匹配。
+
+## 4. 安装 Hook
+
+Hook 源文件全部位于 `Hook/`。安装脚本会把 SessionStart 和 SessionEnd 配置合并到现有 `hooks.json`，并在覆盖前创建 `.bak` 备份：
+
+```bash
+python Hook/install.py
+```
+
+只查看将生成的配置：
+
+```bash
+python Hook/install.py --dry-run
+```
+
+如果当前 Codex 配置尚未启用 Hook，在 `~/.codex/config.toml` 中加入：
+
+```toml
+[features]
+hooks = true
+```
+
+重启 Codex 后运行 `/hooks`，审核并信任新增 Hook。仓库中的 `Hook/hooks.json` 是使用 `CODEX_AGENTS_CONFIG_ROOT` 环境变量的便携模板；通常直接运行安装脚本更简单，因为它会生成绝对路径。
+
+## 5. 初始化项目知识库
+
+```bash
+python Skills/project-memory/scripts/memory_store.py \
+  --vault-root "<Vault根目录>" \
+  --project "<项目名称>" \
+  init
+```
+
+生成结构：
 
 ```text
 知识库/
-├── 知识库首页.md
-├── 项目架构.md
-├── 技术决策.md
-├── 代码约定.md
-├── API模式.md
-├── Bug修复记录.md
-├── 环境配置.md
-└── 架构/
-    └── 模块名.md
+├── 当前状态.md
+├── 索引.md
+├── 决策/
+├── Bug/
+├── API/
+├── 架构/
+├── 约定/
+├── 环境/
+└── 收件箱/
 ```
 
-`项目架构.md` 通过 Obsidian 嵌入语法聚合各模块的核心架构摘要，减少重复读取和无效上下文占用。
+已有的 `项目架构.md`、`技术决策.md` 等旧笔记不会被覆盖或删除，可以在确认新流程稳定后逐步迁移。
 
-## 使用要求
+## 自动记忆边界
 
-- Codex 或其他支持 `AGENTS.md` 的智能编码工具。
-- Obsidian 桌面端和 Obsidian CLI；仅在启用长记忆时需要。
-- Obsidian Dataview 插件；用于自动生成知识库最近动态。
+- SessionStart：只有 `自动加载：是` 时才读取短 `当前状态.md`。
+- SessionEnd：只向 `收件箱/` 写入会话 ID、仓库位置和 transcript 路径等元数据。
+- project-memory Skill：审核候选，并用代码、测试、提交或用户确认验证后写入正式记录。
+- Codex 原生 Memories：适合个人偏好和稳定工作习惯，不作为项目权威事实来源。
+
+这种分层可以避免把模型猜测、临时日志或未确认方案自动固化为长期记忆。
 
 ## 隐私与安全
 
-- 仓库中的路径均使用占位符，不包含真实用户名或本机目录。
-- 在公开自己的配置前，请再次检查 API 密钥、令牌、密码、个人路径和内部项目资料。
-- 建议将真实路径和凭据放在本地环境变量或私有配置中，不要提交到公开仓库。
-
-## 自定义
-
-可以根据团队需要调整以下内容：
-
-- 回复语言和代码风格。
-- 知识库目录、固定笔记和模块模板。
-- 重要信息的写入条件与去重策略。
-- 多代理的委派范围、并发规则和验收标准。
-
-修改规则时，建议同时更新 `AGENTS.md` 和本 README，确保文档与实际行为一致。
-
+- 仓库不包含真实 Vault 路径、用户名、密钥或内部项目资料。
+- Hook 不复制完整聊天内容，只保存 transcript 的本地路径和待审核状态。
+- 正式记忆不得包含密码、令牌、私钥或其他秘密。
+- 公开配置前仍应检查 Git diff 和提交内容。
