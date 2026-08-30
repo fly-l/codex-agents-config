@@ -1,0 +1,4 @@
+interface:
+  display_name: "项目记忆整理"
+  short_description: "审计近义与陈旧知识，生成可追溯摘要并无损去重"
+  default_prompt: "使用 $project-memory-curator 审计、总结并减少当前项目知识库的冗余。"

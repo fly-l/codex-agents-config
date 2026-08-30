@@ -44,6 +44,8 @@ description: 检索、初始化和维护项目级长期记忆。仅在任务依�
 4. 新记录替代旧记录时，设置 `supersedes`，并把旧记录状态改为 `superseded`。
 5. 运行 `scripts/memory_store.py validate`，确认没有重复 ID 或指纹。
 
+如果发现多条近义记录、同主题冲突或需要重建全库摘要，停止逐条写入并改用 `project-memory-curator`；不要在本 Skill 中扫描整个知识库。
+
 正式记录必须有可核验来源。用户明确确认可以作为来源；代码事实应尽量包含文件位置、提交 SHA 或测试命令。
 
 ## 初始化

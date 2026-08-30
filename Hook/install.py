@@ -36,7 +36,7 @@ def group(event: str, script: Path) -> dict:
         "statusMessage": "检查项目记忆摘要" if event == "SessionStart" else "登记待审核项目记忆",
     }
     if event == "SessionStart":
-        handler["additionalContextLimit"] = 1500
+        handler["additionalContextLimit"] = 1200
         matcher = "startup|resume|clear|compact"
     else:
         matcher = "other"

@@ -16,7 +16,7 @@ def main() -> None:
         return
     path = context["knowledge_root"] / "当前状态.md"
     try:
-        limit = max(500, min(int(os.environ.get("CODEX_MEMORY_CONTEXT_CHARS", "4000")), 12000))
+        limit = max(500, min(int(os.environ.get("CODEX_MEMORY_CONTEXT_CHARS", "2400")), 6000))
         content = path.read_text(encoding="utf-8")[:limit]
     except (OSError, UnicodeError, ValueError):
         return

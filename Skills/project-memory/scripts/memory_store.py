@@ -320,7 +320,7 @@ def command_validate(args: argparse.Namespace) -> None:
     records = collect_records(root)
     errors: list[str] = []
     ids: dict[str, str] = {}
-    fingerprints: dict[str, str] = {}
+    fingerprints: dict[str, list[dict[str, Any]]] = {}
     for item in records:
         record_id = str(item.get("id", ""))
         path = str(item.get("path", ""))
@@ -329,11 +329,23 @@ def command_validate(args: argparse.Namespace) -> None:
             errors.append(f"重复 ID：{record_id} ({ids[record_id]}, {path})")
         ids[record_id] = path
         if digest:
-            if digest in fingerprints:
-                errors.append(f"重复指纹：{record_id} 与 {fingerprints[digest]}")
-            fingerprints[digest] = record_id
+            fingerprints.setdefault(digest, []).append(item)
         if item.get("status") not in VALID_STATUSES:
             errors.append(f"无效状态：{record_id} -> {item.get('status')}")
+    for items in fingerprints.values():
+        live_ids = [
+            str(item.get("id", ""))
+            for item in items
+            if item.get("status") not in {"deprecated", "superseded"}
+        ]
+        if len(live_ids) > 1:
+            errors.append(f"有效记录重复指纹：{', '.join(live_ids)}")
+    for item in records:
+        if item.get("status") != "superseded":
+            continue
+        replacement = str(item.get("superseded_by") or "")
+        if replacement and replacement not in ids:
+            errors.append(f"替代目标不存在：{item.get('id')} -> {replacement}")
     result = {"ok": not errors, "records": len(records), "errors": errors}
     print(json.dumps(result, ensure_ascii=False))
     if errors:

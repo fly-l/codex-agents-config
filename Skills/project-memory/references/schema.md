@@ -17,6 +17,8 @@
 
 `当前状态.md` 只保存仍然有效的短摘要，建议不超过 80 行。历史事实分别保存为原子笔记；每日记录或 Hook 产生的候选记录不能作为权威事实直接召回。
 
+`知识摘要.md` 由 `project-memory-curator` 按需生成，只汇总当前有效知识并引用原子记录 ID。它用于导航和降低重复读取成本，不替代源码、测试或原子记录。
+
 ## 记录字段
 
 每条正式记录至少包含：
@@ -30,6 +32,7 @@
 | `verified_at` | 最近验证日期 |
 | `fingerprint` | 规范化内容的 SHA-256 指纹，用于去重 |
 | `supersedes` | 被当前记录替代的旧记录 ID |
+| `superseded_by` | 旧记录被替代时指向当前保留记录 ID |
 
 推荐 ID：
 
@@ -51,7 +54,7 @@ ID 一旦创建不得因标题修改而变化。
 3. `status: active|accepted|fixed` 且最近验证的记录
 4. 历史记录和 Hook 收件箱候选
 
-低优先级内容不得覆盖高优先级事实。发现冲突时保留旧记录，将其标记为 `superseded` 或 `deprecated`，并通过 `supersedes` 建立关系。
+低优先级内容不得覆盖高优先级事实。发现冲突时保留旧记录，将其标记为 `superseded` 或 `deprecated`；新记录用 `supersedes` 指向旧记录，旧记录用 `superseded_by` 指回新记录。
 
 ## 写入边界
 

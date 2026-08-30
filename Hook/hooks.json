@@ -11,7 +11,7 @@
             "commandWindows": "py -3 \"%CODEX_AGENTS_CONFIG_ROOT%\\Hook\\project_memory_session_start.py\"",
             "timeout": 3,
             "statusMessage": "检查项目记忆摘要",
-            "additionalContextLimit": 1500
+            "additionalContextLimit": 1200
           }
         ]
       }
