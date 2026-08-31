@@ -1,0 +1,4 @@
+interface:
+  display_name: "项目记忆维护"
+  short_description: "定期审计、总结并无损压缩项目知识库的活跃检索上下文"
+  default_prompt: "使用 $project-memory-maintenance 审计并压缩当前项目的长期记忆。"

@@ -1,11 +1,13 @@
 # Codex AGENTS 配置
 
-这是一套可复用的 Codex 配置，包含精简的运行时 `AGENTS.md`、按需加载的项目记忆 Skill，以及基于生命周期事件的 Hook。
+这是一套可复用的 Codex 配置，包含精简的运行时 `AGENTS.md`、按需加载的项目记忆 Skill、周期维护 Skill，以及基于生命周期事件的 Hook。
 
 ## 设计目标
 
 - 全局 `AGENTS.md` 只保留必须始终生效的路由与约束。
 - 项目记忆默认延迟召回，不在每次会话开始时读取整个知识库。
+- 活跃索引与历史索引分离；活跃入口最多 60 条、6,000 字符，已替代记录不会持续占用普通召回上下文。
+- 周期维护先做元数据审计，再按小批次总结同主题记录，不全量加载知识库正文。
 - 正式记录使用稳定 ID、状态、来源、验证日期和内容指纹。
 - 写入采用原子化 upsert，不使用盲目 `append`，不手工制造反向链接。
 - Hook 只登记待审核会话；聊天内容不会未经验证直接成为权威记忆。
@@ -17,10 +19,14 @@
 .
 ├── AGENTS.md
 ├── Skills/
-│   └── project-memory/
+│   ├── project-memory/
 │       ├── SKILL.md
 │       ├── references/schema.md
 │       └── scripts/memory_store.py
+│   └── project-memory-maintenance/
+│       ├── SKILL.md
+│       ├── references/consolidation.md
+│       └── scripts/memory_maintenance.py
 └── Hook/
     ├── hooks.json
     ├── install.py
@@ -61,17 +67,18 @@ $env:CODEX_MEMORY_VAULT = "D:\ObsidianNoteHub\项目代码"
 
 环境变量的优先级更高。
 
-## 3. 安装 project-memory Skill
+## 3. 安装项目记忆 Skills
 
-将 `Skills/project-memory` 复制到 Codex Skills 目录。Windows PowerShell 示例：
+将两个项目记忆 Skill 复制到 Codex Skills 目录。Windows PowerShell 示例：
 
 ```powershell
 $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { "$HOME\.codex" }
 New-Item -ItemType Directory -Force "$codexHome\skills" | Out-Null
 Copy-Item -Recurse -Force ".\Skills\project-memory" "$codexHome\skills\project-memory"
+Copy-Item -Recurse -Force ".\Skills\project-memory-maintenance" "$codexHome\skills\project-memory-maintenance"
 ```
 
-安装后可通过 `$project-memory` 显式调用；当任务明确依赖项目历史或产生持久事实时也可自动匹配。
+安装后可通过 `$project-memory` 检索或记录长期事实，通过 `$project-memory-maintenance` 审计、总结和去重知识库。
 
 ## 4. 安装 Hook
 
@@ -110,7 +117,9 @@ python Skills/project-memory/scripts/memory_store.py \
 ```text
 知识库/
 ├── 当前状态.md
+├── 知识摘要.md（首次维护后生成）
 ├── 索引.md
+├── 历史索引.md
 ├── 决策/
 ├── Bug/
 ├── API/
@@ -121,6 +130,18 @@ python Skills/project-memory/scripts/memory_store.py \
 ```
 
 已有的 `项目架构.md`、`技术决策.md` 等旧笔记不会被覆盖或删除，可以在确认新流程稳定后逐步迁移。
+
+## 6. 周期维护知识库
+
+先手动运行一次：
+
+```text
+使用 $project-memory-maintenance 维护当前项目知识库。先审计；仅在活跃索引超过建议范围、存在同主题冗余或状态链未收敛时分批复核并合并。不得删除历史记录。完成后报告前后指标。
+```
+
+确认结果符合预期后，可让 Codex 把同一提示词配置为每周或每两周运行的自动化，并明确项目、时区与运行时间。不要把语义总结挂到 SessionStart 或 SessionEnd；这两个 Hook 继续只负责短摘要注入和候选登记。
+
+维护脚本生成最多 6,000 字符、80 行且带输入指纹和覆盖范围的 `知识摘要.md`，把 `索引.md` 控制为最多 60 条、6,000 字符的活跃入口，并将 `deprecated`、`superseded` 记录放进 `历史索引.md`。摘要过期或覆盖不完整时 `$project-memory` 会回退到同样有硬上限的活跃索引；历史原文仍保留在原子笔记中，需要追溯时才加载。
 
 ## 自动记忆边界
 
