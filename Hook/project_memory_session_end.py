@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import re
 from pathlib import Path
@@ -15,8 +16,11 @@ def safe_name(value: str) -> str:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", choices=("codex", "claude"), default="codex")
+    args = parser.parse_args()
     event = read_event()
-    context = resolve(event)
+    context = resolve(event, host=args.host)
     if not context or context["config"].get("自动收集", "是") != "是":
         return
     now = dt.datetime.now(dt.timezone.utc)

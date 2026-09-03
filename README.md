@@ -1,3 +1,37 @@
+# 跳过这个 README 吧
+
+读文档的时代已经过去了。直接把下面这段发给你的 Agent：
+
+```text
+请在当前环境中安装并初始化以下 Codex 配置仓库：
+https://github.com/fly-l/codex-agents-config.git
+
+执行要求：
+1. 将仓库克隆到合适的本地目录，先完整阅读仓库中的 README.md、AGENTS.md 和 Hook/install.py，再根据当前操作系统执行安装。
+2. 检查 CODEX_HOME（未设置时使用 ~/.codex）以及已有的 AGENTS.md、config.toml 和 hooks.json。修改前创建备份，保留并合并已有配置，不要直接覆盖用户内容。
+3. 按仓库说明安装根目录的 AGENTS.md、project-memory 与 project-memory-maintenance Skills，以及 SessionStart、SessionEnd Hooks；如未启用 Hooks，安全地将 hooks = true 合并到 config.toml 的 [features] 配置中。
+4. 写入项目记忆配置或初始化知识库前，先询问我的项目名称、Vault 根目录、是否自动加载和是否自动收集；不得猜测个人路径。获得答案后，更新当前项目 AGENTS.md 的“知识体系”章节并初始化知识库。
+5. 运行安装脚本提供的 dry-run 或其他适用检查，验证 Skills 已安装、hooks.json 格式有效、Hook 路径可用，并说明是否需要重启 Codex 及运行 /hooks 进行确认。
+6. 最后报告安装位置、备份位置、实际修改、验证结果以及仍需我手动完成的步骤。未经确认，不删除现有文件，也不覆盖有冲突的配置。
+```
+
+## 推荐插件
+
+推荐安装 Graphify。把下面这段发给 Agent，即可完成安装和项目初始化：
+
+```text
+请在当前环境中安装 Graphify，并为当前 Codex 项目完成初始化。官方仓库：
+git@github.com:Graphify-Labs/graphify.git
+
+执行要求：
+1. 先阅读官方仓库的最新 README 和安装说明，检查当前操作系统、Python 版本及已有安装，避免破坏现有 Python 和 Codex 配置。
+2. 确认 Python 版本不低于 3.10，优先使用隔离环境执行 `uv tool install graphifyy`；没有 uv 时使用官方支持的 pipx 方案。注意官方 PyPI 包名是 `graphifyy`（双 y），CLI 命令才是 `graphify`，不要安装其他同名包。
+3. 使用 `graphify install --platform codex` 注册 Codex Skill；若适合仅在当前仓库启用，则使用 `graphify install --project --platform codex`。修改已有配置前先备份并采用合并方式。
+4. 检查 Codex 的 `~/.codex/config.toml`，将 `multi_agent = true` 安全地合并到 `[features]`，保留其他配置；如变更需要重启 Codex，明确提示我。
+5. 在当前项目根目录初始化知识图谱。PowerShell 中使用 `graphify .`；在 Codex 对话中使用 `$graphify`。不要未经确认配置或上传任何 API 密钥、私有代码或文档。
+6. 验证 `graphify` 命令和 Skill 可用，并确认生成了 `graphify-out/graph.html`、`graphify-out/GRAPH_REPORT.md` 与 `graphify-out/graph.json`。最后报告安装版本、配置变更、生成文件和任何失败项。
+```
+
 # Codex AGENTS 配置
 
 这是一套可复用的 Codex 配置，包含精简的运行时 `AGENTS.md`、按需加载的项目记忆 Skill、周期维护 Skill，以及基于生命周期事件的 Hook。

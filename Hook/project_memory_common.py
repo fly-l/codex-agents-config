@@ -30,7 +30,7 @@ def find_git_root(cwd: Path) -> Path:
     return current
 
 
-def instruction_files(root: Path, cwd: Path) -> list[Path]:
+def instruction_files(root: Path, cwd: Path, host: str = "codex") -> list[Path]:
     try:
         relative = cwd.resolve().relative_to(root.resolve())
     except ValueError:
@@ -41,8 +41,9 @@ def instruction_files(root: Path, cwd: Path) -> list[Path]:
         cursor = cursor / part
         directories.append(cursor)
     result: list[Path] = []
+    names = ("CLAUDE.md",) if host == "claude" else ("AGENTS.override.md", "AGENTS.md")
     for directory in directories:
-        for name in ("AGENTS.override.md", "AGENTS.md"):
+        for name in names:
             path = directory / name
             if path.is_file():
                 result.append(path)
@@ -50,9 +51,9 @@ def instruction_files(root: Path, cwd: Path) -> list[Path]:
     return result
 
 
-def parse_config(root: Path, cwd: Path) -> dict[str, str]:
+def parse_config(root: Path, cwd: Path, host: str = "codex") -> dict[str, str]:
     config: dict[str, str] = {}
-    for path in instruction_files(root, cwd):
+    for path in instruction_files(root, cwd, host):
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeError):
@@ -67,13 +68,19 @@ def parse_config(root: Path, cwd: Path) -> dict[str, str]:
     return config
 
 
-def resolve(event: dict[str, Any]) -> dict[str, Any] | None:
+def resolve(event: dict[str, Any], host: str = "codex") -> dict[str, Any] | None:
+    if host not in {"codex", "claude"}:
+        return None
     cwd = Path(str(event.get("cwd") or os.getcwd()))
     root = find_git_root(cwd)
-    config = parse_config(root, cwd)
+    config = parse_config(root, cwd, host)
     if config.get("启用") != "是" or not config.get("项目名称"):
         return None
-    vault = os.environ.get("CODEX_MEMORY_VAULT") or config.get("Vault根目录")
+    vault = (
+        os.environ.get("CLAUDE_MEMORY_VAULT")
+        if host == "claude"
+        else os.environ.get("CODEX_MEMORY_VAULT")
+    ) or config.get("Vault根目录")
     if not vault:
         return None
     project = config["项目名称"]

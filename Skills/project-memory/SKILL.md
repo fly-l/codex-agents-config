@@ -9,11 +9,11 @@ description: 检索、初始化和维护项目级长期记忆。仅在任务依�
 
 ## 启用检查
 
-从当前已加载的项目级 `AGENTS.md` 的 `知识体系` 章节读取：
+从当前宿主已加载的项目级指令文件的 `知识体系` 章节读取：Codex 使用 `AGENTS.md`，Claude Code 使用 `CLAUDE.md`。
 
 - `启用` 必须为 `是`。
 - `项目名称` 必须存在。
-- Vault 根目录优先使用环境变量 `CODEX_MEMORY_VAULT`，其次使用 `Vault根目录` 配置。
+- Vault 根目录优先使用当前宿主的环境变量：Codex 使用 `CODEX_MEMORY_VAULT`，Claude Code 使用 `CLAUDE_MEMORY_VAULT`；其次使用 `Vault根目录` 配置。
 
 缺少任一必要值时停止记忆操作。不要猜测路径，不要创建替代目录。
 

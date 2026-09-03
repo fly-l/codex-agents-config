@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 
@@ -10,13 +11,21 @@ from project_memory_common import read_event, resolve
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", choices=("codex", "claude"), default="codex")
+    args = parser.parse_args()
     event = read_event()
-    context = resolve(event)
+    context = resolve(event, host=args.host)
     if not context or context["config"].get("自动加载", "否") != "是":
         return
     path = context["knowledge_root"] / "当前状态.md"
     try:
-        limit = max(500, min(int(os.environ.get("CODEX_MEMORY_CONTEXT_CHARS", "4000")), 12000))
+        limit_name = (
+            "CLAUDE_MEMORY_CONTEXT_CHARS"
+            if args.host == "claude"
+            else "CODEX_MEMORY_CONTEXT_CHARS"
+        )
+        limit = max(500, min(int(os.environ.get(limit_name, "4000")), 12000))
         content = path.read_text(encoding="utf-8")[:limit]
     except (OSError, UnicodeError, ValueError):
         return

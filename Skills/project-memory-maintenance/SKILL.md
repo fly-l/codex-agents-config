@@ -9,7 +9,7 @@ description: 定期审计、总结和去重项目长期记忆，缩小 project-m
 
 ## 启用检查
 
-复用 `$project-memory` 的项目配置：`启用` 必须为 `是`，`项目名称` 必须存在，Vault 根目录优先使用 `CODEX_MEMORY_VAULT`，其次使用 `Vault根目录`。缺失任一值时停止，不猜测路径。
+复用 `project-memory` 的项目配置：`启用` 必须为 `是`，`项目名称` 必须存在。Codex 从项目级 `AGENTS.md` 读取并优先使用 `CODEX_MEMORY_VAULT`；Claude Code 从项目级 `CLAUDE.md` 读取并优先使用 `CLAUDE_MEMORY_VAULT`；两者均以 `Vault根目录` 作为次选。缺失任一必要值时停止，不猜测路径。
 
 ## 维护流程
 
