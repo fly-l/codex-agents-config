@@ -26,6 +26,7 @@ KIND_DIRS = {
     "environment": "环境",
 }
 RETIRED_STATUSES = {"deprecated", "superseded"}
+AUTHORITATIVE_STATUSES = {"active", "accepted", "fixed"}
 ACTIVE_INDEX_MAX_RECORDS = 60
 ACTIVE_INDEX_MAX_CHARS = 6000
 REQUIRED_FIELDS = {"id", "type", "status", "title", "source", "verified_at", "fingerprint"}
@@ -144,6 +145,22 @@ def normalize(value: str) -> str:
     return " ".join(value.replace("\r\n", "\n").replace("\r", "\n").split()).casefold()
 
 
+def select_module(records: list[dict[str, Any]], module: str | None) -> list[dict[str, Any]]:
+    """与普通召回使用相同的模块范围，兼容尚未分类的旧记录。"""
+    if module is None:
+        return records
+    return [
+        record for record in records
+        if not record["module"] or "global" in record["module"] or module in record["module"]
+    ]
+
+
+def summary_path(root: Path, module: str | None) -> Path:
+    if module is None:
+        return root / "知识摘要.md"
+    return root / "模块摘要" / f"{hashlib.sha256(module.encode('utf-8')).hexdigest()}.md"
+
+
 def features(value: str) -> set[str]:
     normalized = normalize(value)
     latin = re.findall(r"[a-z0-9_.-]+", normalized)
@@ -189,9 +206,11 @@ def active_input_fingerprint(records: list[dict[str, Any]]) -> str:
             "status": record["status"],
             "fingerprint": record_digest(record),
             "updated": record["metadata"].get("updated", ""),
+            "source": record["source"],
+            "verified_at": record["verified_at"],
         }
         for record in sorted(records, key=lambda item: item["id"])
-        if record["status"] not in RETIRED_STATUSES
+        if record["status"] in AUTHORITATIVE_STATUSES
     ]
     rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
@@ -225,7 +244,7 @@ def inbox_stats(root: Path, max_samples: int) -> dict[str, Any]:
 
 def command_audit(args: argparse.Namespace) -> None:
     root = knowledge_root(args.vault_root, args.project)
-    records = collect_records(root)
+    records = select_module(collect_records(root), args.module)
     if len(records) > args.max_records:
         fail(f"记录数 {len(records)} 超过 --max-records={args.max_records}，请缩小范围")
 
@@ -316,12 +335,12 @@ def command_audit(args: argparse.Namespace) -> None:
             )
 
     current_input_fingerprint = active_input_fingerprint(records)
-    summary_path = root / "知识摘要.md"
-    summary_metadata = read_document(summary_path)[0] if summary_path.exists() else {}
+    target_summary = summary_path(root, args.module)
+    summary_metadata = read_document(target_summary)[0] if target_summary.exists() else {}
     summary_fingerprint = str(summary_metadata.get("source_fingerprint") or "")
     summary_coverage = str(summary_metadata.get("coverage") or "partial")
     summary_stale = (
-        not summary_path.exists() or summary_fingerprint != current_input_fingerprint
+        not target_summary.exists() or summary_fingerprint != current_input_fingerprint
     )
     result = {
         "ok": not missing_fields,
@@ -347,7 +366,9 @@ def command_audit(args: argparse.Namespace) -> None:
         "missing_fields": missing_fields[: args.max_candidates],
         "inbox": inbox_stats(root, args.max_candidates),
         "summary": {
-            "exists": summary_path.exists(),
+            "path": str(target_summary),
+            "module": args.module,
+            "exists": target_summary.exists(),
             "updated": summary_metadata.get("updated"),
             "source_records": summary_metadata.get("source_records", []),
             "source_fingerprint": summary_fingerprint,
@@ -384,8 +405,8 @@ def update_frontmatter(raw: str, updates: dict[str, Any]) -> str:
 
 
 def render_index(project: str, records: list[dict[str, Any]]) -> str:
-    active = [record for record in records if record["status"] not in RETIRED_STATUSES]
-    historical_count = len(records) - len(active)
+    active = [record for record in records if record["status"] in AUTHORITATIVE_STATUSES]
+    historical_count = sum(record["status"] in RETIRED_STATUSES for record in records)
     lines = [
         "---",
         f"project: {scalar(project)}",
@@ -506,7 +527,7 @@ def command_supersede(args: argparse.Namespace) -> None:
 
 def command_write_summary(args: argparse.Namespace) -> None:
     root = knowledge_root(args.vault_root, args.project)
-    records = collect_records(root)
+    records = select_module(collect_records(root), args.module)
     by_id = {record["id"]: record for record in records}
     source_ids = list(dict.fromkeys(validate_id(value) for value in args.source_id))
     try:
@@ -519,7 +540,10 @@ def command_write_summary(args: argparse.Namespace) -> None:
         fail("知识库非空时必须提供至少一个 --source-id")
     missing = [record_id for record_id in source_ids if record_id not in by_id]
     if missing:
-        fail(f"摘要引用了不存在的记录：{', '.join(missing)}")
+        fail(f"摘要引用了不存在或不属于当前模块范围的记录：{', '.join(missing)}")
+    proposed = [record_id for record_id in source_ids if by_id[record_id]["status"] == "proposed"]
+    if proposed:
+        fail(f"摘要不能引用未确认提议：{', '.join(proposed)}")
     retired = [record_id for record_id in source_ids if by_id[record_id]["status"] in RETIRED_STATUSES]
     if retired and not args.include_retired:
         fail(f"摘要默认不能引用停用记录：{', '.join(retired)}")
@@ -527,19 +551,20 @@ def command_write_summary(args: argparse.Namespace) -> None:
     if uncited:
         fail(f"摘要正文未出现这些来源 ID：{', '.join(uncited)}")
     active_ids = {
-        record["id"] for record in records if record["status"] not in RETIRED_STATUSES
+        record["id"] for record in records if record["status"] in AUTHORITATIVE_STATUSES
     }
     if args.coverage == "complete":
         missing_coverage = sorted(active_ids - set(source_ids))
         if missing_coverage:
             fail(f"完整摘要未覆盖活跃记录：{', '.join(missing_coverage)}")
 
-    active_records = [record for record in records if record["status"] not in RETIRED_STATUSES]
+    active_records = [record for record in records if record["status"] in AUTHORITATIVE_STATUSES]
     source_fingerprint = active_input_fingerprint(records)
     content = (
         "---\n"
         f"project: {scalar(args.project)}\n"
         "kind: knowledge-summary\n"
+        f"module: {scalar(args.module)}\n"
         f"updated: {dt.date.today().isoformat()}\n"
         f"source_records: {scalar(source_ids)}\n"
         f"record_count: {len(active_records)}\n"
@@ -550,13 +575,14 @@ def command_write_summary(args: argparse.Namespace) -> None:
         "> 这是导航摘要；实现和决策仍以当前代码、测试及链接的原子记录为准。\n\n"
         f"{body}\n"
     )
-    target = root / "知识摘要.md"
+    target = summary_path(root, args.module)
     atomic_write(target, content)
     print(
         json.dumps(
             {
                 "ok": True,
                 "path": str(target),
+                "module": args.module,
                 "source_records": source_ids,
                 "source_fingerprint": source_fingerprint,
                 "coverage": args.coverage,
@@ -626,6 +652,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     audit = subparsers.add_parser("audit", help="盘点重复、冲突、陈旧知识和收件箱")
+    audit.add_argument("--module", help="只审计指定模块、global 和未分类旧记录")
     audit.add_argument("--similarity-threshold", type=float, default=0.72)
     audit.add_argument("--stale-days", type=int, default=180)
     audit.add_argument("--max-records", type=int, default=2000)
@@ -640,6 +667,7 @@ def build_parser() -> argparse.ArgumentParser:
     supersede.set_defaults(func=command_supersede)
 
     summary = subparsers.add_parser("write-summary", help="写入带来源记录的知识摘要")
+    summary.add_argument("--module", help="为指定模块、global 和未分类旧记录生成摘要")
     summary.add_argument("--body-file", required=True)
     summary.add_argument("--source-id", action="append", default=[])
     summary.add_argument("--include-retired", action="store_true")
@@ -660,6 +688,10 @@ def main() -> None:
     args = parser.parse_args()
     if not args.vault_root:
         fail("缺少 --vault-root，且未设置 CODEX_MEMORY_VAULT")
+    if getattr(args, "module", None) is not None:
+        args.module = args.module.strip()
+        if not args.module:
+            fail("--module 不能为空")
     threshold = getattr(args, "similarity_threshold", 0.72)
     if threshold < 0 or threshold > 1:
         fail("--similarity-threshold 必须在 0 到 1 之间")

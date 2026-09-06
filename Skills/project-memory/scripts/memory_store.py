@@ -32,6 +32,7 @@ VALID_STATUSES = {
     "superseded",
 }
 HISTORICAL_STATUSES = {"deprecated", "superseded"}
+AUTHORITATIVE_STATUSES = {"active", "accepted", "fixed"}
 ACTIVE_INDEX_MAX_RECORDS = 60
 ACTIVE_INDEX_MAX_CHARS = 6000
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -67,7 +68,7 @@ def fingerprint(kind: str, title: str, body: str, modules: list[str]) -> str:
 def active_input_fingerprint(root: Path, records: list[dict[str, Any]]) -> str:
     payload: list[dict[str, str]] = []
     for item in sorted(records, key=lambda row: str(row.get("id", ""))):
-        if item.get("status") in HISTORICAL_STATUSES:
+        if item.get("status") not in AUTHORITATIVE_STATUSES:
             continue
         body = read_record_content(root / f"{item.get('path', '')}.md")
         modules = item.get("module", [])
@@ -86,6 +87,8 @@ def active_input_fingerprint(root: Path, records: list[dict[str, Any]]) -> str:
                 "status": str(item.get("status", "")),
                 "fingerprint": digest,
                 "updated": str(item.get("updated", "")),
+                "source": str(item.get("source", "")),
+                "verified_at": str(item.get("verified_at", "")),
             }
         )
     rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -295,6 +298,73 @@ def render_index(
     return "\n".join([*lines, *rows]) + "\n"
 
 
+def select_modules(records: list[dict[str, Any]], modules: list[str]) -> list[dict[str, Any]]:
+    """模块查询同时保留全局规则和需要复核范围的旧记录。"""
+    if not modules:
+        return records
+    requested = set(modules)
+    return [
+        item for item in records
+        if not item.get("module")
+        or "global" in item["module"]
+        or requested.intersection(item["module"])
+    ]
+
+
+def command_search(args: argparse.Namespace) -> None:
+    terms = list(dict.fromkeys(normalize(args.query).split()))
+    modules = [value.strip() for value in args.module]
+    if any(not value for value in modules) or (not terms and not modules):
+        fail("检索必须提供非空 --query 或 --module")
+    if args.limit < 1 or args.offset < 0 or args.max_chars < 1:
+        fail("--limit、--max-chars 必须为正数，--offset 不能为负数")
+    root = knowledge_root(args.vault_root, args.project)
+    if not root.is_dir():
+        fail("项目知识库尚未初始化")
+    candidates = select_modules(collect_records(root), modules)
+    matches: list[tuple[int, str, dict[str, Any]]] = []
+    for item in candidates:
+        if item.get("status") not in AUTHORITATIVE_STATUSES:
+            continue
+        body = read_record_content(root / f"{item['path']}.md")
+        if body is None:
+            fail(f"无法读取记录正文：{item['id']}")
+        heading = normalize(f"{item['id']} {item.get('title', '')} {' '.join(item.get('module', []))}")
+        content = normalize(f"{item.get('source', '')} {body}")
+        score = sum(3 * (term in heading) + (term in content) for term in terms)
+        if terms and not score:
+            continue
+        result = {
+            key: item.get(key, "")
+            for key in ("id", "title", "status", "path", "source", "verified_at")
+        }
+        result["module"] = item.get("module", [])
+        result["scope_needs_review"] = not bool(item.get("module"))
+        result["excerpt"] = body[:240]
+        matches.append((score, str(item.get("updated", "")), result))
+    matches.sort(key=lambda item: (item[0], item[1], item[2]["id"]), reverse=True)
+    selected = [item[2] for item in matches[args.offset : args.offset + args.limit]]
+    while True:
+        next_offset = args.offset + len(selected)
+        more = next_offset < len(matches)
+        payload = {
+            "ok": True,
+            "records": selected,
+            "total": len(matches),
+            "next_offset": next_offset if more else None,
+            "truncated": more,
+        }
+        rendered = json.dumps(payload, ensure_ascii=False)
+        if len(rendered) + 1 <= args.max_chars:
+            if more and not selected:
+                fail("--max-chars 无法容纳一条结果，请提高上限")
+            print(rendered)
+            return
+        if not selected:
+            fail("--max-chars 无法容纳检索结果，请提高上限")
+        selected.pop()
+
+
 def render_history_index(project: str, records: list[dict[str, Any]]) -> str:
     lines = [
         "---",
@@ -322,7 +392,7 @@ def render_history_index(project: str, records: list[dict[str, Any]]) -> str:
 
 def rebuild_indexes(root: Path, project: str) -> None:
     records = collect_records(root)
-    active = [item for item in records if item.get("status") not in HISTORICAL_STATUSES]
+    active = [item for item in records if item.get("status") in AUTHORITATIVE_STATUSES]
     historical = [item for item in records if item.get("status") in HISTORICAL_STATUSES]
     atomic_write(root / "索引.md", render_index(project, active, len(historical)))
     atomic_write(root / "历史索引.md", render_history_index(project, historical))
@@ -578,8 +648,11 @@ def command_maintenance_audit(args: argparse.Namespace) -> None:
     root = knowledge_root(args.vault_root, args.project)
     if not root.is_dir():
         fail("项目知识库尚未初始化")
-    records = collect_records(root)
-    active = [item for item in records if item.get("status") not in HISTORICAL_STATUSES]
+    module = args.module.strip() if args.module is not None else None
+    if module == "":
+        fail("--module 不能为空")
+    records = select_modules(collect_records(root), [module] if module else [])
+    active = [item for item in records if item.get("status") in AUTHORITATIVE_STATUSES]
     historical = [item for item in records if item.get("status") in HISTORICAL_STATUSES]
 
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -592,14 +665,14 @@ def command_maintenance_audit(args: argparse.Namespace) -> None:
         grouped.setdefault(key, []).append(item)
 
     candidates: list[dict[str, Any]] = []
-    for (kind, module), items in grouped.items():
+    for (kind, candidate_module), items in grouped.items():
         if len(items) < 2:
             continue
         ordered = sorted(items, key=lambda row: str(row.get("updated", "")), reverse=True)
         candidates.append(
             {
                 "type": kind,
-                "module": module,
+                "module": candidate_module,
                 "records": len(ordered),
                 "sample_ids": [str(item.get("id")) for item in ordered[: args.batch_size]],
                 "truncated": len(ordered) > args.batch_size,
@@ -633,6 +706,8 @@ def command_maintenance_audit(args: argparse.Namespace) -> None:
             continue
 
     summary_path = root / "知识摘要.md"
+    if module:
+        summary_path = root / "模块摘要" / f"{hashlib.sha256(module.encode('utf-8')).hexdigest()}.md"
     summary_metadata = read_frontmatter(summary_path) if summary_path.exists() else {}
     current_fingerprint = active_input_fingerprint(root, records)
     summary_fingerprint = str(summary_metadata.get("source_fingerprint") or "")
@@ -655,6 +730,8 @@ def command_maintenance_audit(args: argparse.Namespace) -> None:
         "stale_sample_ids": stale_ids[: args.batch_size],
         "candidate_groups": candidates[: args.max_groups],
         "summary": {
+            "path": str(summary_path),
+            "module": module,
             "exists": summary_path.exists(),
             "updated": summary_metadata.get("updated"),
             "source_fingerprint": summary_fingerprint,
@@ -679,6 +756,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_parser = subparsers.add_parser("init", help="初始化知识库")
     init_parser.set_defaults(func=command_init)
+
+    search = subparsers.add_parser("search", help="按关键词和模块检索全部正式记录，分页返回相关结果")
+    search.add_argument("--query", default="")
+    search.add_argument("--module", action="append", default=[])
+    search.add_argument("--limit", type=int, default=3)
+    search.add_argument("--offset", type=int, default=0)
+    search.add_argument("--max-chars", type=int, default=6000)
+    search.set_defaults(func=command_search)
 
     upsert = subparsers.add_parser("upsert", help="创建或更新原子记录")
     upsert.add_argument("--kind", required=True, choices=sorted(KIND_DIRS))
@@ -712,6 +797,7 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild.set_defaults(func=command_rebuild_indexes)
 
     audit = subparsers.add_parser("maintenance-audit", help="输出知识库维护审计摘要")
+    audit.add_argument("--module", help="只审计指定模块、global 和未分类旧记录")
     audit.add_argument("--stale-days", type=int, default=180)
     audit.add_argument("--batch-size", type=int, default=12)
     audit.add_argument("--max-groups", type=int, default=20)

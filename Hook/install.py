@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""将仓库中的项目记忆 Hook 合并到 Codex hooks.json。"""
+"""将仓库中的项目记忆与对话标题 Hook 合并到 Codex hooks.json。"""
 
 from __future__ import annotations
 
@@ -15,8 +15,13 @@ from pathlib import Path
 
 
 HANDLERS = {
-    "SessionStart": "project_memory_session_start.py",
-    "SessionEnd": "project_memory_session_end.py",
+    "SessionStart": (
+        ("project_memory_session_start.py", "检查项目记忆摘要", "startup|resume|clear|compact"),
+    ),
+    "SessionEnd": (
+        ("conversation_title_session_end.py", "检查并整理当前对话标题", ".*"),
+        ("project_memory_session_end.py", "登记待审核项目记忆", "other"),
+    ),
 }
 
 
@@ -26,21 +31,39 @@ def command_for(script: Path) -> tuple[str, str]:
     return unix, windows
 
 
-def group(event: str, script: Path) -> dict:
+def group(event: str, script: Path, status: str, matcher: str) -> dict:
     command, command_windows = command_for(script)
     handler = {
         "type": "command",
         "command": command,
         "commandWindows": command_windows,
         "timeout": 3,
-        "statusMessage": "检查项目记忆摘要" if event == "SessionStart" else "登记待审核项目记忆",
+        "statusMessage": status,
     }
     if event == "SessionStart":
         handler["additionalContextLimit"] = 1500
-        matcher = "startup|resume|clear|compact"
-    else:
-        matcher = "other"
     return {"matcher": matcher, "hooks": [handler]}
+
+
+def remove_managed_handlers(groups: list, managed_filenames: set[str]) -> list:
+    result = []
+    for item in groups:
+        if not isinstance(item, dict) or not isinstance(item.get("hooks"), list):
+            result.append(item)
+            continue
+        remaining = [
+            hook
+            for hook in item["hooks"]
+            if not any(
+                filename in json.dumps(hook, ensure_ascii=False)
+                for filename in managed_filenames
+            )
+        ]
+        if remaining:
+            if len(remaining) != len(item["hooks"]):
+                item = {**item, "hooks": remaining}
+            result.append(item)
+    return result
 
 
 def main() -> None:
@@ -64,14 +87,14 @@ def main() -> None:
         payload = {"description": "Codex lifecycle hooks", "hooks": {}}
 
     hooks = payload.setdefault("hooks", {})
-    for event, filename in HANDLERS.items():
+    managed_filenames = {
+        spec[0] for specs in HANDLERS.values() for spec in specs
+    }
+    for event, specs in HANDLERS.items():
         groups = hooks.setdefault(event, [])
-        groups[:] = [
-            item
-            for item in groups
-            if filename not in json.dumps(item, ensure_ascii=False)
-        ]
-        groups.append(group(event, hook_dir / filename))
+        groups[:] = remove_managed_handlers(groups, managed_filenames)
+        for filename, status, matcher in specs:
+            groups.append(group(event, hook_dir / filename, status, matcher))
 
     rendered = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     if args.dry_run:

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
 import re
 from pathlib import Path
 
@@ -16,6 +17,8 @@ def safe_name(value: str) -> str:
 
 
 def main() -> None:
+    if os.environ.get("CODEX_RENAME_CURRENT_TITLE_CHILD") == "1":
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", choices=("codex", "claude"), default="codex")
     args = parser.parse_args()

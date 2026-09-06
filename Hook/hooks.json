@@ -1,5 +1,5 @@
 {
-  "description": "项目长期记忆：可选的短摘要加载与待审核会话登记。",
+  "description": "项目长期记忆与当前对话标题整理 Hook。",
   "hooks": {
     "SessionStart": [
       {
@@ -17,6 +17,18 @@
       }
     ],
     "SessionEnd": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CODEX_AGENTS_CONFIG_ROOT/Hook/conversation_title_session_end.py\"",
+            "commandWindows": "py -3 \"%CODEX_AGENTS_CONFIG_ROOT%\\Hook\\conversation_title_session_end.py\"",
+            "timeout": 3,
+            "statusMessage": "检查并整理当前对话标题"
+          }
+        ]
+      },
       {
         "matcher": "other",
         "hooks": [

@@ -160,7 +160,9 @@ python "<project-memory Skill目录>/scripts/memory_store.py" \
   init
 ```
 
-初始化只创建缺失目录和基础索引，不会覆盖已有笔记。
+此命令只创建缺失目录和基础索引，不会覆盖已有笔记。完整初始化还必须由 `project-memory` Skill 根据当前项目源码、配置和已确认约定，先通过 `upsert` 填充项目概况、主要模块导航、运行验证和核心约定等首批有来源的原子记录；模块细节和专题事实按需渐进补充，再使用 `set-current` 更新当前状态并运行 `validate`。具体步骤见 [初始化流程](Skills/project-memory/SKILL.md#初始化)。不能仅创建空结构就报告初始化完成。
+
+规模较大的项目可以在知识库中按需创建 `模块摘要/`，模块摘要文件名使用模块名 UTF-8 编码后的完整 SHA-256。`当前状态.md` 保留全局约束和模块导航，不要求项目级摘要容纳所有模块细节。
 
 ## 6. 安装 Claude Code Hooks
 
@@ -186,7 +188,21 @@ python Hook/install_claude.py --target .claude/settings.local.json
 
 安装后重启 Claude Code，运行 `/hooks` 审核配置。`SessionStart` 根据 `自动加载` 决定是否注入短摘要，`SessionEnd` 根据 `自动收集` 决定是否登记待审核会话。
 
-## 7. 推荐插件：Graphify
+## 7. 周期维护项目知识库
+
+先手动运行一次：
+
+```text
+使用 $project-memory-maintenance 维护当前项目知识库。先按需要执行项目或单模块审计；检查摘要缺失/过期、范围不符、待复核项、同主题冗余和状态链。不要因活跃记录少于 60 条就跳过。按小批次复核并合并，不得删除历史记录；写入由单一代理串行完成，子代理只提供候选与证据。完成后报告范围、摘要 path/module、前后指标和遗留待复核项。
+```
+
+维护脚本默认写入摘要正文最多 6,000 字符、80 行的项目级 `知识摘要.md`；指定单个 `--module "<模块>"` 时写入 `模块摘要/<模块名 UTF-8 的完整 SHA-256>.md`。审计会读取正文计算输入指纹，但不会把全量正文注入模型；指纹纳入正文、模块、状态、来源和验证日期等知识输入，只表示摘要输入是否变化，不能替代源码、测试或来源复核；frontmatter 的来源 ID、覆盖范围和指纹不计入正文限制。模块摘要只对匹配模块、`global` 与无模块旧记录计算有效性；无模块记录必须复核范围。`partial` 摘要不能作为完整入口，模块 `complete` 也不代表全项目完整。`proposed` 排除权威索引与摘要但仍可被审计，不得通过合并自动提升为 `accepted`、`active`，经用户确认并复核后按记录流程处理。
+
+普通召回入口以 `project-memory` Skill 为准；需要定向搜索时，`memory_store.py search` 默认只返回 `active`、`accepted`、`fixed`，查询所有分类目录，不受首页 60 条限制，首轮默认 3 条、6,000 字符，可用 `--offset` 分页或扩大 `--limit`。摘要缺失或过期在当前任务需要它作为入口时才触发维护；待复核项和重复候选也会触发维护。
+
+升级后旧版本摘要可能因指纹算法或覆盖状态变化一次性被标记为过期；按需重写对应摘要，旧首页若仍显示 `proposed` 可运行 `rebuild-indexes` 清理。该兼容处理不修改原子记录格式，也不要求迁移旧原子记录。
+
+## 8. 推荐插件：Graphify
 
 Graphify 可以把代码、文档和配置构建为可查询的知识图谱。可把下面整段发给 Claude Code：
 
@@ -199,7 +215,7 @@ git@github.com:Graphify-Labs/graphify.git
 
 `graphify claude install` 会修改项目的 `CLAUDE.md`。如果本仓库配置已安装，必须先备份并检查合并结果，避免覆盖模型分工、项目记忆和多代理规则。
 
-## 8. 验证清单
+## 9. 验证清单
 
 - `claude --version` 与 `claude doctor` 正常。
 - `/memory` 能看到预期作用域的 `CLAUDE.md`。
