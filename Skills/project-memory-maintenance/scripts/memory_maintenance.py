@@ -17,6 +17,12 @@ from pathlib import Path
 from typing import Any
 
 
+MEMORY_SCRIPTS = Path(__file__).resolve().parents[2] / "project-memory" / "scripts"
+sys.path.insert(0, str(MEMORY_SCRIPTS))
+
+from memory_inbox import candidate_lock
+
+
 KIND_DIRS = {
     "decision": "决策",
     "bug": "Bug",
@@ -25,12 +31,23 @@ KIND_DIRS = {
     "convention": "约定",
     "environment": "环境",
 }
+VALID_STATUSES = {
+    "proposed",
+    "accepted",
+    "active",
+    "fixed",
+    "deprecated",
+    "superseded",
+}
 RETIRED_STATUSES = {"deprecated", "superseded"}
 AUTHORITATIVE_STATUSES = {"active", "accepted", "fixed"}
 ACTIVE_INDEX_MAX_RECORDS = 60
 ACTIVE_INDEX_MAX_CHARS = 6000
 REQUIRED_FIELDS = {"id", "type", "status", "title", "source", "verified_at", "fingerprint"}
+FINGERPRINT_VERSION = 2
+SUMMARY_KIND = "knowledge-summary"
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 FRONTMATTER_END = "\n---\n"
 
 
@@ -83,23 +100,40 @@ def parse_scalar(value: str) -> Any:
         return value.strip().strip('"').strip("'")
 
 
-def read_document(path: Path) -> tuple[dict[str, Any], str, str]:
+def read_document(path: Path, *, strict: bool = False) -> tuple[dict[str, Any], str, str]:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
+        if strict:
+            fail(f"无法读取记录 {path}：{exc}")
         fail(f"无法读取 {path}：{exc}")
     if not text.startswith("---\n"):
+        if strict:
+            fail(f"记录缺少 frontmatter：{path}")
         return {}, text, text
     end = text.find(FRONTMATTER_END, 4)
     if end < 0:
+        if strict:
+            fail(f"记录 frontmatter 不完整：{path}")
         return {}, text, text
     frontmatter = text[4:end]
     metadata: dict[str, Any] = {}
     for line in frontmatter.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
         if ":" not in line:
+            if strict:
+                fail(f"记录 frontmatter 格式错误：{path}")
             continue
         key, value = line.split(":", 1)
-        metadata[key.strip()] = parse_scalar(value.strip())
+        key = key.strip()
+        if not key:
+            if strict:
+                fail(f"记录 frontmatter 格式错误：{path}")
+            continue
+        if key in metadata and strict:
+            fail(f"记录 frontmatter 存在重复字段 {key}：{path}")
+        metadata[key] = parse_scalar(value.strip())
     body = text[end + len(FRONTMATTER_END) :]
     return metadata, body, text
 
@@ -112,23 +146,36 @@ def record_content(document_body: str) -> str:
 
 
 def collect_records(root: Path) -> list[dict[str, Any]]:
+    if not root.is_dir():
+        fail("项目知识库尚未初始化")
     records: list[dict[str, Any]] = []
     for expected_type, directory in KIND_DIRS.items():
         folder = root / directory
         if not folder.exists():
             continue
+        if not folder.is_dir():
+            fail(f"分类目录不是目录：{folder}")
         for path in sorted(folder.glob("*.md")):
-            metadata, document_body, raw = read_document(path)
+            metadata, document_body, raw = read_document(path, strict=True)
             if not metadata.get("id"):
-                continue
+                fail(f"记录缺少 id：{path}")
+            if "module" not in metadata:
+                modules: Any = []
+            elif not isinstance(metadata["module"], list):
+                fail(f"module 不是列表：{path}")
+            else:
+                modules = metadata["module"]
+            if any(not isinstance(module, str) for module in modules):
+                fail(f"module 必须是字符串列表：{path}")
             records.append(
                 {
                     "id": str(metadata.get("id")),
-                    "type": str(metadata.get("type") or expected_type),
+                    "type": str(metadata.get("type") or ""),
+                    "expected_type": expected_type,
                     "status": str(metadata.get("status") or ""),
                     "title": str(metadata.get("title") or ""),
-                    "module": metadata.get("module") if isinstance(metadata.get("module"), list) else [],
-                    "source": str(metadata.get("source") or ""),
+                    "module": modules,
+                    "source": metadata.get("source") if isinstance(metadata.get("source"), str) else "",
                     "verified_at": str(metadata.get("verified_at") or ""),
                     "fingerprint": str(metadata.get("fingerprint") or ""),
                     "metadata": metadata,
@@ -143,6 +190,11 @@ def collect_records(root: Path) -> list[dict[str, Any]]:
 
 def normalize(value: str) -> str:
     return " ".join(value.replace("\r\n", "\n").replace("\r", "\n").split()).casefold()
+
+
+def normalize_line_endings(value: str) -> str:
+    """仅统一换行符，保留大小写、缩进和其他空白。"""
+    return value.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def select_module(records: list[dict[str, Any]], module: str | None) -> list[dict[str, Any]]:
@@ -189,6 +241,21 @@ def record_digest(record: dict[str, Any]) -> str:
     payload = json.dumps(
         {
             "type": record["type"],
+            "title": normalize_line_endings(record["title"]),
+            "body": normalize_line_endings(record["body"]),
+            "module": sorted(record["module"]),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def legacy_record_digest(record: dict[str, Any]) -> str:
+    """计算升级前的宽松指纹，只用于读取没有版本标记的旧记录。"""
+    payload = json.dumps(
+        {
+            "type": record["type"],
             "title": normalize(record["title"]),
             "body": normalize(record["body"]),
             "module": sorted(normalize(item) for item in record["module"]),
@@ -199,26 +266,95 @@ def record_digest(record: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def active_input_fingerprint(records: list[dict[str, Any]]) -> str:
+def fingerprint_is_valid(record: dict[str, Any]) -> bool:
+    stored = record["metadata"].get("fingerprint")
+    current = record_digest(record)
+    version = record["metadata"].get("fingerprint_version")
+    if version == FINGERPRINT_VERSION:
+        return stored == current
+    if version not in (None, 1):
+        return False
+    return stored in {current, legacy_record_digest(record)}
+
+
+def active_input_fingerprint(
+    records: list[dict[str, Any]], included_history: list[str] | None = None
+) -> str:
+    history_ids = set(included_history or [])
     payload = [
         {
             "id": record["id"],
             "status": record["status"],
             "fingerprint": record_digest(record),
-            "updated": record["metadata"].get("updated", ""),
+            "updated": str(record["metadata"].get("updated", "")),
             "source": record["source"],
             "verified_at": record["verified_at"],
         }
         for record in sorted(records, key=lambda item: item["id"])
         if record["status"] in AUTHORITATIVE_STATUSES
+        or (record["id"] in history_ids and record["status"] in RETIRED_STATUSES)
     ]
-    rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    rendered = json.dumps(
+        {"version": FINGERPRINT_VERSION, "records": payload},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
     return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
+def summary_scope_errors(
+    metadata: dict[str, Any],
+    *,
+    project: str,
+    module: str | None,
+    records: list[dict[str, Any]],
+) -> list[str]:
+    """检查摘要声明的项目、模块和来源范围，不推断缺失字段的值。"""
+    errors: list[str] = []
+    if metadata.get("project") != project:
+        errors.append("摘要 project 与当前项目不匹配")
+    if "module" not in metadata:
+        errors.append("摘要 module 与当前范围不匹配")
+    elif metadata.get("module") != module:
+        errors.append("摘要 module 与当前范围不匹配")
+    if metadata.get("kind") != SUMMARY_KIND:
+        errors.append("摘要 kind 无效")
+
+    coverage = metadata.get("coverage")
+    if coverage not in {"partial", "complete"}:
+        errors.append("摘要 coverage 缺失或无效")
+
+    source_ids = metadata.get("source_records")
+    source_ids_are_strings = isinstance(source_ids, list) and all(
+        isinstance(record_id, str) for record_id in source_ids
+    )
+    if not source_ids_are_strings:
+        errors.append("摘要 source_records 必须是字符串列表")
+        return errors
+
+    if len(source_ids) != len(set(source_ids)):
+        errors.append("摘要 source_records 含重复 ID")
+    by_id = {record["id"]: record for record in records}
+    if any(
+        record_id not in by_id
+        or by_id[record_id]["status"] not in AUTHORITATIVE_STATUSES | RETIRED_STATUSES
+        for record_id in source_ids
+    ):
+        errors.append("摘要引用了不存在、越界或非权威来源")
+    if coverage == "complete" and not {
+        record["id"]
+        for record in records
+        if record["status"] in AUTHORITATIVE_STATUSES
+    }.issubset(source_ids):
+        errors.append("完整摘要未覆盖当前全部权威记录")
+    return errors
+
+
 def parse_date(value: str) -> dt.date | None:
+    if not isinstance(value, str) or not ISO_DATE.fullmatch(value):
+        return None
     try:
-        return dt.date.fromisoformat(value[:10])
+        return dt.date.fromisoformat(value)
     except (TypeError, ValueError):
         return None
 
@@ -316,11 +452,40 @@ def command_audit(args: argparse.Namespace) -> None:
     today = dt.date.today()
     stale: list[dict[str, Any]] = []
     missing_fields: list[dict[str, Any]] = []
+    metadata_errors: list[dict[str, Any]] = []
     for record in records:
         missing = sorted(field for field in REQUIRED_FIELDS if not record["metadata"].get(field))
         if missing:
             missing_fields.append({"id": record["id"], "missing": missing})
         verified = parse_date(record["verified_at"])
+        record_errors: list[str] = []
+        raw_id = record["metadata"].get("id")
+        if not isinstance(raw_id, str) or not SAFE_ID.fullmatch(raw_id):
+            record_errors.append("id 不合法")
+        if record["type"] != record["expected_type"]:
+            record_errors.append(
+                f"type 与目录不匹配，应为 {record['expected_type']}，实际为 {record['type']}"
+            )
+        raw_source = record["metadata"].get("source")
+        if not isinstance(raw_source, str) or not raw_source.strip():
+            record_errors.append("source 为空")
+        if record["status"] not in VALID_STATUSES:
+            record_errors.append(f"status 无效：{record['status']}")
+        if verified is None:
+            record_errors.append(f"verified_at 不是合法日期：{record['verified_at']}")
+        fingerprint_version = record["metadata"].get("fingerprint_version")
+        if fingerprint_version not in (None, 1, FINGERPRINT_VERSION):
+            record_errors.append(f"未知指纹版本：{fingerprint_version}")
+        if not fingerprint_is_valid(record):
+            record_errors.append("内容指纹不匹配")
+        if record_errors:
+            metadata_errors.append(
+                {
+                    "id": record["id"],
+                    "path": record["relative_path"],
+                    "errors": record_errors,
+                }
+            )
         if (
             verified
             and record["status"] not in RETIRED_STATUSES
@@ -334,16 +499,31 @@ def command_audit(args: argparse.Namespace) -> None:
                 }
             )
 
-    current_input_fingerprint = active_input_fingerprint(records)
     target_summary = summary_path(root, args.module)
     summary_metadata = read_document(target_summary)[0] if target_summary.exists() else {}
-    summary_fingerprint = str(summary_metadata.get("source_fingerprint") or "")
-    summary_coverage = str(summary_metadata.get("coverage") or "partial")
+    source_records = summary_metadata.get("source_records")
+    included_history = (
+        source_records
+        if isinstance(source_records, list)
+        and all(isinstance(record_id, str) for record_id in source_records)
+        else None
+    )
+    current_input_fingerprint = active_input_fingerprint(records, included_history)
+    summary_fingerprint = summary_metadata.get("source_fingerprint")
+    summary_coverage = summary_metadata.get("coverage")
+    summary_scope = summary_scope_errors(
+        summary_metadata,
+        project=args.project,
+        module=args.module,
+        records=records,
+    )
     summary_stale = (
         not target_summary.exists() or summary_fingerprint != current_input_fingerprint
     )
+    summary_scope_valid = not summary_scope
     result = {
-        "ok": not missing_fields,
+        "ok": not missing_fields and not metadata_errors,
+        "empty": not records,
         "root": str(root),
         "stats": {
             "records": len(records),
@@ -364,18 +544,23 @@ def command_audit(args: argparse.Namespace) -> None:
             : args.max_candidates
         ],
         "missing_fields": missing_fields[: args.max_candidates],
+        "metadata_errors": metadata_errors[: args.max_candidates],
         "inbox": inbox_stats(root, args.max_candidates),
         "summary": {
             "path": str(target_summary),
             "module": args.module,
             "exists": target_summary.exists(),
             "updated": summary_metadata.get("updated"),
-            "source_records": summary_metadata.get("source_records", []),
+            "source_records": summary_metadata.get("source_records"),
             "source_fingerprint": summary_fingerprint,
             "current_fingerprint": current_input_fingerprint,
             "coverage": summary_coverage,
+            "scope_valid": summary_scope_valid,
+            "scope_errors": summary_scope[: args.max_candidates],
             "stale": summary_stale,
-            "usable": not summary_stale and summary_coverage == "complete",
+            "usable": summary_scope_valid
+            and not summary_stale
+            and summary_coverage == "complete",
         },
         "output_truncated_at": args.max_candidates,
     }
@@ -559,12 +744,13 @@ def command_write_summary(args: argparse.Namespace) -> None:
             fail(f"完整摘要未覆盖活跃记录：{', '.join(missing_coverage)}")
 
     active_records = [record for record in records if record["status"] in AUTHORITATIVE_STATUSES]
-    source_fingerprint = active_input_fingerprint(records)
+    source_fingerprint = active_input_fingerprint(records, source_ids)
     content = (
         "---\n"
         f"project: {scalar(args.project)}\n"
-        "kind: knowledge-summary\n"
+        f"kind: {scalar(SUMMARY_KIND)}\n"
         f"module: {scalar(args.module)}\n"
+        f"include_retired: {scalar(args.include_retired)}\n"
         f"updated: {dt.date.today().isoformat()}\n"
         f"source_records: {scalar(source_ids)}\n"
         f"record_count: {len(active_records)}\n"
@@ -582,7 +768,10 @@ def command_write_summary(args: argparse.Namespace) -> None:
             {
                 "ok": True,
                 "path": str(target),
+                "project": args.project,
+                "kind": SUMMARY_KIND,
                 "module": args.module,
+                "include_retired": args.include_retired,
                 "source_records": source_ids,
                 "source_fingerprint": source_fingerprint,
                 "coverage": args.coverage,
@@ -603,6 +792,8 @@ def command_archive_inbox(args: argparse.Namespace) -> None:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, UnicodeError, json.JSONDecodeError):
                 continue
+            if not isinstance(payload, dict):
+                continue
             if payload.get("status") not in {"processed", "ignored"}:
                 continue
             raw_date = str(payload.get("processed_at") or payload.get("created_at") or "")
@@ -618,14 +809,32 @@ def command_archive_inbox(args: argparse.Namespace) -> None:
     moved: list[str] = []
     conflicts: list[str] = []
     if args.apply:
-        for path, processed_at in candidates:
-            target = inbox / "归档" / str(processed_at.year) / path.name
-            if target.exists():
-                conflicts.append(path.name)
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(path), str(target))
-            moved.append(str(target))
+        for path, _ in candidates:
+            with candidate_lock(path):
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("status") not in {"processed", "ignored"}:
+                    continue
+                raw_date = str(payload.get("processed_at") or payload.get("created_at") or "")
+                try:
+                    processed_at = dt.datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+                    if processed_at.tzinfo is None:
+                        processed_at = processed_at.replace(tzinfo=dt.timezone.utc)
+                except ValueError:
+                    continue
+                if processed_at > cutoff:
+                    continue
+                target = inbox / "归档" / str(processed_at.year) / path.name
+                if target.exists():
+                    conflicts.append(path.name)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(path), str(target))
+                moved.append(str(target))
     print(
         json.dumps(
             {
@@ -645,8 +854,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--vault-root",
-        default=os.environ.get("CODEX_MEMORY_VAULT"),
-        help="Obsidian Vault 根目录；默认读取 CODEX_MEMORY_VAULT",
+        default=os.environ.get("PROJECT_MEMORY_VAULT"),
+        help="Obsidian Vault 根目录；默认读取 PROJECT_MEMORY_VAULT",
     )
     parser.add_argument("--project", required=True, help="项目名称")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -687,7 +896,7 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     if not args.vault_root:
-        fail("缺少 --vault-root，且未设置 CODEX_MEMORY_VAULT")
+        fail("缺少 --vault-root，且未设置 PROJECT_MEMORY_VAULT")
     if getattr(args, "module", None) is not None:
         args.module = args.module.strip()
         if not args.module:

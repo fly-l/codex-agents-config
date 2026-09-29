@@ -22,6 +22,8 @@ MAINTENANCE = (
 SESSION_START = REPO_ROOT / "Hook" / "project_memory_session_start.py"
 SESSION_END = REPO_ROOT / "Hook" / "project_memory_session_end.py"
 INSTALL_CLAUDE = REPO_ROOT / "Hook" / "install_claude.py"
+INSTALL_PI = REPO_ROOT / "Hook" / "install_pi.py"
+MANAGER = REPO_ROOT / "Hook" / "manage_installation.py"
 
 
 class MemorySystemTests(unittest.TestCase):
@@ -149,26 +151,29 @@ class MemorySystemTests(unittest.TestCase):
                 "reason": "other",
             }
             env = os.environ.copy()
-            env["CODEX_MEMORY_VAULT"] = str(vault)
+            env["PROJECT_MEMORY_VAULT"] = str(vault)
 
             started = subprocess.run(
                 [sys.executable, str(SESSION_START)],
                 input=json.dumps({**event, "hook_event_name": "SessionStart"}),
                 text=True,
+                encoding="utf-8",
                 capture_output=True,
                 check=True,
                 env=env,
             )
             self.assertIn("使用原子记录", started.stdout)
 
-            subprocess.run(
+            stopped = subprocess.run(
                 [sys.executable, str(SESSION_END)],
-                input=json.dumps({**event, "hook_event_name": "SessionEnd"}),
+                input=json.dumps({**event, "hook_event_name": "Stop", "turn_id": "turn-1"}),
                 text=True,
+                encoding="utf-8",
                 capture_output=True,
                 check=True,
                 env=env,
             )
+            self.assertEqual(json.loads(stopped.stdout), {})
             inbox = list((vault / "Hook测试" / "知识库" / "收件箱").glob("*.json"))
             self.assertEqual(len(inbox), 1)
             payload = json.loads(inbox[0].read_text(encoding="utf-8"))
@@ -180,6 +185,8 @@ class MemorySystemTests(unittest.TestCase):
                 "mark-inbox",
                 "--file",
                 inbox[0].name,
+                "--expected-updated-at",
+                payload["updated_at"],
                 "--status",
                 "processed",
             )
@@ -218,29 +225,152 @@ class MemorySystemTests(unittest.TestCase):
                 "reason": "other",
             }
             env = os.environ.copy()
-            env["CLAUDE_MEMORY_VAULT"] = str(vault)
+            env["PROJECT_MEMORY_VAULT"] = str(vault)
             env["CODEX_MEMORY_VAULT"] = str(base / "wrong-vault")
 
             started = subprocess.run(
                 [sys.executable, str(SESSION_START), "--host", "claude"],
                 input=json.dumps({**event, "hook_event_name": "SessionStart"}),
                 text=True,
+                encoding="utf-8",
                 capture_output=True,
                 check=True,
                 env=env,
             )
             self.assertIn("Claude Hook 已加载", started.stdout)
 
-            subprocess.run(
+            stopped = subprocess.run(
                 [sys.executable, str(SESSION_END), "--host", "claude"],
-                input=json.dumps({**event, "hook_event_name": "SessionEnd"}),
+                input=json.dumps({**event, "hook_event_name": "Stop", "turn_id": "turn-1"}),
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=True,
+                env=env,
+            )
+            self.assertEqual(json.loads(stopped.stdout), {})
+            inbox = list((vault / "Claude测试" / "知识库" / "收件箱").glob("*.json"))
+            self.assertEqual(len(inbox), 1)
+
+    def test_pi_hooks_use_agents_instruction_and_pi_vault(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            repo = base / "repo"
+            vault = base / "vault"
+            (repo / ".git").mkdir(parents=True)
+            (repo / "CLAUDE.md").write_text(
+                "## 知识体系\n"
+                "- 启用：是\n"
+                "- 项目名称：错误项目\n",
+                encoding="utf-8",
+            )
+            (repo / "AGENTS.md").write_text(
+                "## 知识体系\n"
+                "- 启用：是\n"
+                "- 项目名称：Pi测试\n"
+                "- 自动加载：是\n"
+                "- 自动收集：是\n",
+                encoding="utf-8",
+            )
+            self.run_store(vault, "Pi测试", "init")
+            current = vault / "Pi测试" / "知识库" / "当前状态.md"
+            current.write_text("# 当前状态\n\n- Pi Hook 已加载。\n", encoding="utf-8")
+            transcript = base / "pi-transcript.jsonl"
+            transcript.write_text("{}\n", encoding="utf-8")
+            event = {
+                "session_id": "pi_test",
+                "transcript_path": str(transcript),
+                "cwd": str(repo),
+                "reason": "other",
+            }
+            env = os.environ.copy()
+            env["PROJECT_MEMORY_VAULT"] = str(vault)
+            env["CODEX_MEMORY_VAULT"] = str(base / "wrong-vault")
+            env["CLAUDE_MEMORY_VAULT"] = str(base / "wrong-vault")
+
+            started = subprocess.run(
+                [sys.executable, str(SESSION_START), "--host", "pi"],
+                input=json.dumps({**event, "hook_event_name": "SessionStart"}),
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=True,
+                env=env,
+            )
+            self.assertIn("Pi Hook 已加载", started.stdout)
+
+            stopped = subprocess.run(
+                [sys.executable, str(SESSION_END), "--host", "pi"],
+                input=json.dumps({**event, "hook_event_name": "Stop"}),
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=True,
+                env=env,
+            )
+            self.assertEqual(json.loads(stopped.stdout), {})
+            inbox = list((vault / "Pi测试" / "知识库" / "收件箱").glob("*.json"))
+            self.assertEqual(len(inbox), 1)
+            payload = json.loads(inbox[0].read_text(encoding="utf-8"))
+            self.assertEqual(payload["host"], "pi")
+            self.assertEqual(payload["status"], "pending")
+
+    def test_pi_hook_installer_renders_extension_and_reports_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp) / ".pi" / "agent"
+            env = os.environ.copy()
+            env["PI_CODING_AGENT_DIR"] = str(home)
+
+            dry_run = subprocess.run(
+                [sys.executable, str(INSTALL_PI), "--dry-run"],
                 text=True,
                 capture_output=True,
                 check=True,
                 env=env,
             )
-            inbox = list((vault / "Claude测试" / "知识库" / "收件箱").glob("*.json"))
-            self.assertEqual(len(inbox), 1)
+            self.assertIn("project_memory_session_start.py", dry_run.stdout)
+            self.assertNotIn("__SESSION_START__", dry_run.stdout)
+            self.assertFalse(home.exists())
+
+            command = [sys.executable, str(INSTALL_PI)]
+            subprocess.run(command, text=True, capture_output=True, check=True, env=env)
+            extension = home / "extensions" / "project-memory-hook.ts"
+            self.assertTrue(extension.is_file())
+            rendered = extension.read_text(encoding="utf-8")
+            self.assertIn("project_memory_session_end.py", rendered)
+            self.assertNotIn("__PYTHON__", rendered)
+
+            subprocess.run(command, text=True, capture_output=True, check=True, env=env)
+            self.assertTrue(extension.with_suffix(".ts.bak").is_file())
+
+            reported = subprocess.run(
+                [
+                    sys.executable,
+                    str(MANAGER),
+                    "status",
+                    "--host",
+                    "pi",
+                    "--home",
+                    str(home),
+                ],
+                text=True,
+                capture_output=True,
+                check=True,
+                env=env,
+            )
+            payload = json.loads(reported.stdout)
+            self.assertEqual(payload["host"], "pi")
+            self.assertTrue(payload["hooks"]["exists"])
+            self.assertEqual(
+                {
+                    item["script"]: item["exists"]
+                    for item in payload["hooks"]["references"]
+                },
+                {
+                    "project_memory_session_start.py": True,
+                    "project_memory_session_end.py": True,
+                },
+            )
 
     def test_claude_hook_installer_merges_backs_up_and_deduplicates(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -298,7 +428,7 @@ class MemorySystemTests(unittest.TestCase):
             self.assertEqual(rendered.count("project_memory_session_start.py"), 1)
             self.assertEqual(rendered.count("project_memory_session_end.py"), 1)
             self.assertIn("keep-existing-hook", rendered)
-            for event in ("SessionStart", "SessionEnd"):
+            for event in ("SessionStart", "Stop"):
                 ours = [
                     item
                     for item in installed["hooks"][event]

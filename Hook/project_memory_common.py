@@ -6,20 +6,58 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 
 
-SECTION = re.compile(r"(?ms)^##\s+知识体系\s*$\n(.*?)(?=^##\s+|\Z)")
+HOSTS = ("codex", "claude", "pi")
+
 FIELD = re.compile(r"^\s*-?\s*([^：:\n]+?)\s*[：:]\s*(.*?)\s*$")
+KNOWLEDGE_HEADING = re.compile(r"^ {0,3}##\s+知识体系\s*$")
+LEVEL_TWO_HEADING = re.compile(r"^ {0,3}##\s+")
+FENCE = re.compile(r"^ {0,3}(?P<marker>`{3,}|~{3,})(?P<tail>.*)$")
+
+
+def read_stdin_utf8() -> str:
+    """读取 Hook 的原始标准输入并按 UTF-8 解码，绕过 Windows 默认代码页。"""
+    stream = sys.stdin
+    buffer = getattr(stream, "buffer", None)
+    value = buffer.read() if buffer is not None else stream.read()
+    return value.decode("utf-8") if isinstance(value, bytes) else value
+
+
+def write_stdout_utf8(value: str) -> None:
+    """按 UTF-8 写出 Hook 响应，绕过 Windows 默认代码页。"""
+    stream = sys.stdout
+    buffer = getattr(stream, "buffer", None)
+    if buffer is not None:
+        buffer.write(value.encode("utf-8"))
+        buffer.flush()
+        return
+    stream.write(value)
+    stream.flush()
+
+
+def write_stderr_utf8(value: str) -> None:
+    """按 UTF-8 写出 Hook 错误响应，绕过 Windows 默认代码页。"""
+    stream = sys.stderr
+    buffer = getattr(stream, "buffer", None)
+    if buffer is not None:
+        buffer.write(value.encode("utf-8"))
+        buffer.flush()
+        return
+    stream.write(value)
+    stream.flush()
 
 
 def read_event() -> dict[str, Any]:
     try:
-        return json.load(__import__("sys").stdin)
-    except (json.JSONDecodeError, OSError):
+        value = json.loads(read_stdin_utf8())
+    except (json.JSONDecodeError, OSError, UnicodeError):
         return {}
+    return value if isinstance(value, dict) else {}
 
 
 def find_git_root(cwd: Path) -> Path:
@@ -41,7 +79,12 @@ def instruction_files(root: Path, cwd: Path, host: str = "codex") -> list[Path]:
         cursor = cursor / part
         directories.append(cursor)
     result: list[Path] = []
-    names = ("CLAUDE.md",) if host == "claude" else ("AGENTS.override.md", "AGENTS.md")
+    if host == "claude":
+        names = ("CLAUDE.md",)
+    elif host == "pi":
+        names = ("AGENTS.override.md", "AGENTS.md", "CLAUDE.md")
+    else:
+        names = ("AGENTS.override.md", "AGENTS.md")
     for directory in directories:
         for name in names:
             path = directory / name
@@ -58,10 +101,33 @@ def parse_config(root: Path, cwd: Path, host: str = "codex") -> dict[str, str]:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeError):
             continue
-        match = SECTION.search(text)
-        if not match:
+        section: list[str] | None = None
+        active_fence: tuple[str, int] | None = None
+        for line in text.splitlines():
+            fence = FENCE.match(line)
+            if active_fence is not None:
+                if (
+                    fence is not None
+                    and fence.group("marker")[0] == active_fence[0]
+                    and len(fence.group("marker")) >= active_fence[1]
+                    and not fence.group("tail").strip()
+                ):
+                    active_fence = None
+                continue
+            if fence is not None:
+                marker = fence.group("marker")
+                active_fence = (marker[0], len(marker))
+                continue
+            if section is None:
+                if KNOWLEDGE_HEADING.fullmatch(line):
+                    section = []
+                continue
+            if LEVEL_TWO_HEADING.match(line):
+                break
+            section.append(line)
+        if section is None:
             continue
-        for line in match.group(1).splitlines():
+        for line in section:
             field = FIELD.match(line)
             if field:
                 config[field.group(1).strip()] = field.group(2).strip().strip("`")
@@ -69,18 +135,14 @@ def parse_config(root: Path, cwd: Path, host: str = "codex") -> dict[str, str]:
 
 
 def resolve(event: dict[str, Any], host: str = "codex") -> dict[str, Any] | None:
-    if host not in {"codex", "claude"}:
+    if host not in HOSTS:
         return None
     cwd = Path(str(event.get("cwd") or os.getcwd()))
     root = find_git_root(cwd)
     config = parse_config(root, cwd, host)
     if config.get("启用") != "是" or not config.get("项目名称"):
         return None
-    vault = (
-        os.environ.get("CLAUDE_MEMORY_VAULT")
-        if host == "claude"
-        else os.environ.get("CODEX_MEMORY_VAULT")
-    ) or config.get("Vault根目录")
+    vault = os.environ.get("PROJECT_MEMORY_VAULT") or config.get("Vault根目录")
     if not vault:
         return None
     project = config["项目名称"]

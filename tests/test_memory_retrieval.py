@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import datetime as dt
 import json
 import os
 import subprocess
@@ -685,6 +686,78 @@ class MemoryRetrievalTests(unittest.TestCase):
             # B 属于范围外模块；A、global 和无模块旧记录共 3 条。
             self.assertEqual(store_audit["active_records"], 3)
             self.assertEqual(store_audit["status_counts"]["active"], 3)
+
+    def test_query_coverage_precedes_heading_weight_and_excerpt_finds_late_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            vault = Path(temp) / "vault"
+            project = "相关性验收"
+            root = self.init_vault(vault, project)
+            self.write_record(root, kind="bug", record_id="BUG-specific",
+                              title="重复扣减", body="背景说明。" * 100 + "库存 幂等：重复请求不能再次扣减。",
+                              modules=["stock"], updated="2025-01-01")
+            self.write_record(root, kind="convention", record_id="CONV-broad",
+                              title="库存管理一般约定", body="库存展示与筛选。",
+                              modules=["stock"], updated="2026-09-26")
+            result = json.loads(self.search(vault, project, "--query", "库存 幂等").stdout)
+            self.assertEqual(result["records"][0]["id"], "BUG-specific")
+            self.assertIn("重复请求不能再次扣减", result["records"][0]["excerpt"])
+            self.assertLessEqual(len(result["records"][0]["excerpt"]), 240)
+            strict = json.loads(self.search(vault, project, "--query", "库存 幂等", "--match", "all").stdout)
+            self.assertEqual([row["id"] for row in strict["records"]], ["BUG-specific"])
+            self.write_record(root, kind="convention", record_id="CONV-reference",
+                              title="BUG-specific 引用说明", body="BUG-specific 的检索示例。",
+                              modules=["stock"])
+            exact = json.loads(self.search(vault, project, "--query", "BUG-specific").stdout)
+            self.assertEqual(exact["records"][0]["id"], "BUG-specific")
+
+    def test_snapshot_rejects_changed_content_beyond_excerpt_and_changed_query(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            vault = Path(temp) / "vault"
+            project = "分页版本验收"
+            root = self.init_vault(vault, project)
+            for index in range(4):
+                self.write_record(root, kind="api", record_id=f"API-page-{index}",
+                                  title="接口约定", body="payment refund " + "背景" * 200,
+                                  modules=["payments"])
+            first = json.loads(self.search(vault, project, "--query", "payment").stdout)
+            page = json.loads(self.search(vault, project, "--query", "payment", "--offset", "3",
+                                          "--expected-snapshot", first["snapshot"]).stdout)
+            self.assertEqual(len(page["records"]), 1)
+            self.assertFalse({r["id"] for r in first["records"]} & {r["id"] for r in page["records"]})
+            changed_query = self.search(vault, project, "--query", "refund", "--offset", "3",
+                                        "--expected-snapshot", first["snapshot"], check=False)
+            self.assertNotEqual(changed_query.returncode, 0)
+            target = root / "API" / "API-page-0.md"
+            target.write_text(target.read_text(encoding="utf-8") + "正文末尾的新约束。\n", encoding="utf-8")
+            changed_body = self.search(vault, project, "--query", "payment", "--offset", "3",
+                                       "--expected-snapshot", first["snapshot"], check=False)
+            self.assertNotEqual(changed_body.returncode, 0)
+
+    def test_summary_only_returns_same_availability_without_maintenance_details(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            vault = Path(temp) / "vault"
+            project = "摘要入口验收"
+            self.init_vault(vault, project)
+            full = self.run_store(vault, project, "maintenance-audit", "--module", "orders")
+            compact = self.run_store(vault, project, "maintenance-audit", "--module", "orders", "--summary-only")
+            self.assertEqual(json.loads(full.stdout)["summary"], json.loads(compact.stdout)["summary"])
+            self.assertEqual(set(json.loads(compact.stdout)), {"ok", "summary"})
+            self.assertLess(len(compact.stdout), len(full.stdout))
+
+    def test_audit_date_boundary_and_invalid_verification_date(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            vault = Path(temp) / "vault"
+            project = "验证日期边界"
+            root = self.init_vault(vault, project)
+            today = dt.date.today().isoformat()
+            path = self.write_record(root, kind="environment", record_id="ENV-current",
+                                     title="环境基线", body="版本已核实", verified_at=today)
+            audit = json.loads(self.run_store(vault, project, "maintenance-audit", "--stale-days", "0").stdout)
+            self.assertEqual(audit["stale_active_records"], 1)
+            content = path.read_text(encoding="utf-8").replace(f'verified_at: "{today}"', 'verified_at: "invalid-date"')
+            path.write_text(content, encoding="utf-8")
+            invalid = self.run_store(vault, project, "maintenance-audit", check=False)
+            self.assertNotEqual(invalid.returncode, 0)
 
     def test_project_level_summary_without_module_remains_project_level(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
