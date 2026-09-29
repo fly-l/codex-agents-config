@@ -18,11 +18,14 @@ HANDLERS = {
     "SessionStart": (
         ("project_memory_session_start.py", "检查项目记忆摘要", "startup|resume|clear|compact"),
     ),
-    "SessionEnd": (
+    "Stop": (
         ("conversation_title_session_end.py", "检查并整理当前对话标题", ".*"),
-        ("project_memory_session_end.py", "登记待审核项目记忆", "other"),
+        ("project_memory_session_end.py", "登记待审核项目记忆", None),
     ),
 }
+
+LEGACY_EVENTS = ("SessionEnd",)
+EXECUTION_FIELDS = frozenset({"command", "commandWindows", "args"})
 
 
 def command_for(script: Path) -> tuple[str, str]:
@@ -31,7 +34,7 @@ def command_for(script: Path) -> tuple[str, str]:
     return unix, windows
 
 
-def group(event: str, script: Path, status: str, matcher: str) -> dict:
+def group(event: str, script: Path, status: str, matcher: str | None) -> dict:
     command, command_windows = command_for(script)
     handler = {
         "type": "command",
@@ -42,7 +45,28 @@ def group(event: str, script: Path, status: str, matcher: str) -> dict:
     }
     if event == "SessionStart":
         handler["additionalContextLimit"] = 1500
-    return {"matcher": matcher, "hooks": [handler]}
+    result = {"hooks": [handler]}
+    if matcher is not None:
+        result["matcher"] = matcher
+    return result
+
+
+def _execution_values(value: object):
+    if isinstance(value, (str, int, float)):
+        yield str(value)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _execution_values(item)
+
+
+def is_managed_handler(hook: object, managed_filenames: set[str]) -> bool:
+    if not isinstance(hook, dict):
+        return False
+    for field in EXECUTION_FIELDS:
+        for value in _execution_values(hook.get(field)):
+            if any(filename in value for filename in managed_filenames):
+                return True
+    return False
 
 
 def remove_managed_handlers(groups: list, managed_filenames: set[str]) -> list:
@@ -54,10 +78,7 @@ def remove_managed_handlers(groups: list, managed_filenames: set[str]) -> list:
         remaining = [
             hook
             for hook in item["hooks"]
-            if not any(
-                filename in json.dumps(hook, ensure_ascii=False)
-                for filename in managed_filenames
-            )
+            if not is_managed_handler(hook, managed_filenames)
         ]
         if remaining:
             if len(remaining) != len(item["hooks"]):
@@ -95,6 +116,12 @@ def main() -> None:
         groups[:] = remove_managed_handlers(groups, managed_filenames)
         for filename, status, matcher in specs:
             groups.append(group(event, hook_dir / filename, status, matcher))
+
+    for event in LEGACY_EVENTS:
+        if event in hooks and isinstance(hooks[event], list):
+            hooks[event][:] = remove_managed_handlers(
+                hooks[event], managed_filenames
+            )
 
     rendered = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     if args.dry_run:

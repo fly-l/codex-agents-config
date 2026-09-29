@@ -16,7 +16,7 @@
         ]
       }
     ],
-    "SessionEnd": [
+    "Stop": [
       {
         "matcher": ".*",
         "hooks": [
@@ -30,7 +30,6 @@
         ]
       },
       {
-        "matcher": "other",
         "hooks": [
           {
             "type": "command",

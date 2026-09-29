@@ -18,12 +18,15 @@ HANDLERS = {
         "matcher": "startup|resume|clear|compact|fork",
         "status": "检查项目记忆摘要",
     },
-    "SessionEnd": {
+    "Stop": {
         "filename": "project_memory_session_end.py",
-        "matcher": "clear|resume|logout|prompt_input_exit|other",
+        "matcher": None,
         "status": "登记待审核项目记忆",
     },
 }
+
+LEGACY_EVENTS = ("SessionEnd",)
+EXECUTION_FIELDS = frozenset({"command", "commandWindows", "args"})
 
 
 def handler(script: Path, status: str) -> dict:
@@ -36,11 +39,46 @@ def handler(script: Path, status: str) -> dict:
     }
 
 
-def group(script: Path, matcher: str, status: str) -> dict:
-    return {
-        "matcher": matcher,
-        "hooks": [handler(script, status)],
-    }
+def group(script: Path, matcher: str | None, status: str) -> dict:
+    result = {"hooks": [handler(script, status)]}
+    if matcher is not None:
+        result["matcher"] = matcher
+    return result
+
+
+def _execution_values(value: object):
+    if isinstance(value, (str, int, float)):
+        yield str(value)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _execution_values(item)
+
+
+def is_managed_handler(hook: object, filename: str) -> bool:
+    if not isinstance(hook, dict):
+        return False
+    for field in EXECUTION_FIELDS:
+        if any(filename in value for value in _execution_values(hook.get(field))):
+            return True
+    return False
+
+
+def remove_managed_handlers(groups: list, filename: str) -> list:
+    result = []
+    for item in groups:
+        if not isinstance(item, dict) or not isinstance(item.get("hooks"), list):
+            result.append(item)
+            continue
+        remaining = [
+            hook
+            for hook in item["hooks"]
+            if not is_managed_handler(hook, filename)
+        ]
+        if remaining:
+            if len(remaining) != len(item["hooks"]):
+                item = {**item, "hooks": remaining}
+            result.append(item)
+    return result
 
 
 def load_settings(target: Path) -> dict:
@@ -65,11 +103,7 @@ def merge_hooks(payload: dict, hook_dir: Path) -> dict:
         if not isinstance(groups, list):
             raise SystemExit(f"现有 Claude Code 设置中的 hooks.{event} 必须是数组。")
         filename = spec["filename"]
-        groups[:] = [
-            item
-            for item in groups
-            if filename not in json.dumps(item, ensure_ascii=False)
-        ]
+        groups[:] = remove_managed_handlers(groups, filename)
         groups.append(
             group(
                 hook_dir / filename,
@@ -77,6 +111,16 @@ def merge_hooks(payload: dict, hook_dir: Path) -> dict:
                 spec["status"],
             )
         )
+
+    for event in LEGACY_EVENTS:
+        if event in hooks:
+            if not isinstance(hooks[event], list):
+                raise SystemExit(
+                    f"现有 Claude Code 设置中的 hooks.{event} 必须是数组。"
+                )
+            hooks[event][:] = remove_managed_handlers(
+                hooks[event], "project_memory_session_end.py"
+            )
     return payload
 
 
@@ -114,7 +158,7 @@ def main() -> None:
 
     write_atomic(target, rendered)
     print(f"已安装到 {target}")
-    print("请重启 Claude Code，并运行 /hooks 审核 SessionStart 与 SessionEnd。")
+    print("请重启 Claude Code，并运行 /hooks 审核 SessionStart 与 Stop。")
 
 
 if __name__ == "__main__":
