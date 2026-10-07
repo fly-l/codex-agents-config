@@ -717,6 +717,9 @@ def command_validate(args: argparse.Namespace) -> None:
                 fingerprints[expected_digest] = record_id
         if item.get("status") not in VALID_STATUSES:
             errors.append(f"无效状态：{record_id} -> {item.get('status')}")
+        superseded_by = item.get("superseded_by")
+        if superseded_by and str(superseded_by) not in records_by_id:
+            errors.append(f"superseded_by 目标不存在：{record_id} -> {superseded_by}")
         supersedes = item.get("supersedes", [])
         if not isinstance(supersedes, list):
             errors.append(f"supersedes 不是列表：{record_id}")

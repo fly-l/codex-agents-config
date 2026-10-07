@@ -1,10 +1,1 @@
-# 主代理：Sol
-model = "gpt-5.6-sol"
-model_reasoning_effort = "high"
-
-[agents]
-enabled = true
-
-# 子代理：Luna Max
-default_subagent_model = "gpt-5.6-luna"
-default_subagent_reasoning_effort = "max"
+# 模型、推理强度和子代理分工由当前宿主配置决定，本仓库不覆盖。

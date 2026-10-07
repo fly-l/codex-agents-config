@@ -1,18 +1,35 @@
 # Codex、Claude Code 与 Pi 配置
 
-一套共用的项目长期记忆 Skills、生命周期 Hook 和多代理协作规则。安装流程统一，主指令入口与 Hook 接入方式按宿主区分。
+一套共用的项目长期记忆 Skills、生命周期 Hook 和轻量多代理协作原则。安装流程统一，主指令入口与 Hook 接入方式按宿主区分。
 
-## 统一安装
+## 快速安装
 
-先安装 Python 和目标宿主，在仓库根目录选择对应命令：
+需要 Python 3.11+ 和目标宿主。没有额外 Python 包依赖。先把仓库下载或克隆到**长期保留的位置**，在仓库目录运行：
 
-| 宿主 | 预览安装 | 实际安装 |
-| --- | --- | --- |
-| Codex | `python install.py --host codex` | `python install.py --host codex --apply` |
-| Claude Code | `python install.py --host claude` | `python install.py --host claude --apply` |
-| Pi | `python install.py --host pi` | `python install.py --host pi --apply` |
+```bash
+python3 install.py --apply
+```
 
-默认只预览，`--apply` 才安装主指令、同目录的 `SUBAGENTS.md`、两个项目记忆 Skills 和对应 Hook。可用 `--home <目录>` 指定宿主目录；这不是项目级安装开关，项目级目录布局见下方宿主说明。
+默认安装 Codex：一次完成主指令、协作规则、两个 Skills、Hook 和 `features.hooks = true`，保留模型、API Key 和其他配置。Windows 安装了 Python Launcher 时可将 `python3` 换成 `py -3`；没有 `py` 命令时使用指向 Python 3.11+ 的 `python`。已有仓库直接运行上面一条命令；首次使用 Git 的 macOS / Linux / WSL 用户也可执行：
+
+```bash
+git clone https://github.com/fly-l/codex-agents-config.git && cd codex-agents-config && python3 install.py --apply
+```
+
+安装后重启 Codex，运行 `/hooks` 审核并信任新增 Hook。项目知识库还需按下方说明配置项目名称与 `PROJECT_MEMORY_VAULT`；安装不会猜测 Vault、初始化空库或切换模型。
+
+### 其他宿主、预览与检查
+
+| 目的 | 命令 |
+| --- | --- |
+| 只预览，不写入（默认行为） | `python3 install.py` |
+| Codex 安装 / 更新 | `python3 install.py --apply` |
+| Claude Code 安装 / 更新 | `python3 install.py --host claude --apply` |
+| Pi 安装 / 更新 | `python3 install.py --host pi --apply` |
+| 检查安装 | `python3 install.py --doctor` |
+| 安装到指定宿主目录 | `python3 install.py --home "<目录>" --apply` |
+
+所有命令都支持 `--host codex|claude|pi` 与 `--home`。`--home` 不是项目级安装开关，项目级布局见下方宿主说明。`--doctor` 只读检查指令、Skills、受管 Hook 配置及其源脚本、Codex hooks 开关；缺失或需要更新时返回非零状态。PATH 中找不到宿主命令时给出提示，桌面宿主仍需在实际应用中验收。
 
 | 宿主 | 宿主目录环境变量 | 默认目录 | 主指令源文件 → 安装文件 | Hook 目标 |
 | --- | --- | --- | --- | --- |
@@ -20,9 +37,27 @@
 | Claude Code | `CLAUDE_CONFIG_DIR` | `~/.claude` | `CLAUDE.md` → `CLAUDE.md` | `settings.json` |
 | Pi | `PI_CODING_AGENT_DIR` | `~/.pi/agent` | `PI.AGENTS.md` → `AGENTS.md` | `extensions/project-memory-hook.ts` |
 
-已有主指令或 `SUBAGENTS.md` 与仓库不同则停止，不执行后续安装。请备份并人工合并，再分别使用下方 Skill 同步与 Hook 安装命令更新其他组件。Skill 和 Hook 的备份沿用各自安装器。Hook 引用本仓库绝对路径，安装后请保留仓库目录。
+### 已有配置怎么办？
 
-模型、API Key、Vault 路径和项目知识体系开关不自动配置；Codex 还需启用 `[features] hooks = true`。手动安装主指令时，必须同时复制 `SUBAGENTS.md` 到同一目录，该文件由主指令明确要求读取。
+默认遇到无法识别的不同主指令会停止，且不会写入其他组件。希望保留原文并追加本仓库规则时，可显式使用：
+
+```bash
+python3 install.py --merge-instructions --apply
+```
+
+新安装的指令使用受管章节，后续升级可直接重跑安装命令。已有自定义规则时，安装器会先备份，再追加带 `codex-agents-config:begin/end` 标记的受管章节；以后重复安装只更新该章节，保留外部内容。它不会判断两套规则的语义冲突，请检查合并后的指令。旧版安装后指令发生变化，也可用此选项保留旧内容，或先人工整理；不要删除受管标记的一半。
+
+每次有配置变更时，在宿主目录的 `backups/codex-agents-config/` 创建独立备份；Skill 变更使用独立备份及哈希清单。重复运行没有差异时不写入、不增加备份。已有其他 Hook、模型设置和非受管 Skill 文件会保留。JSON/TOML 解析失败或目标路径冲突时会在写入前停止。特殊 TOML 写法若不能安全修改，按提示手动启用 hooks 后重试。
+
+需要恢复时，从输出的备份目录取回对应原文件；新创建的文件没有旧版本备份，删除前请核对安装结果。安装不是跨文件事务：磁盘或权限等写入期错误可能留下部分变更，修复原因后重跑即可，已有文件仍有备份。
+
+### 从旧协作规则升级
+
+独立 `SUBAGENTS.md` 已退役，不再安装或要求每次任务读取。安装器可以精确识别上一版未修改的主指令，备份后替换为新版本。旧 `SUBAGENTS.md` 只有在完整原文匹配（兼容 LF / CRLF 换行）时才会备份并移除；带本安装器完整受管包装的原版也可识别。用户定制的文件、带额外内容的文件和符号链接一律保留并提示检查。
+
+自定义主指令使用 `--merge-instructions` 时仍保留原文；如果原文引用旧 `SUBAGENTS.md`，安装器会提示人工检查，不能只追加新规则就假定旧调度约束已消失。未知旧版本也不会凭文件名覆盖。用户现有模型设置不自动迁移或删除，需要时请自行调整宿主配置。
+
+Hook 引用本仓库和当前 Python 的绝对路径，**安装后不要移动 / 删除仓库或 Python 环境**。更新仓库后重跑安装命令，再运行 `--doctor`。静态检查通过不等于真实会话已生效，最终验收见“验证”。
 
 ## 直接让 Agent 安装
 
@@ -32,11 +67,11 @@
 请在当前环境中安装并初始化以下配置仓库：
 https://github.com/fly-l/codex-agents-config.git
 
-1. 阅读 README.md、当前宿主对应的主指令、SUBAGENTS.md 与安装脚本。确认目标宿主和安装范围；无法从上下文确定时再询问。
-2. 检查已有指令、Skills、Hook 和模型配置。修改前备份，保留已有内容；统一安装器遇到指令冲突时，先人工合并，再分组件安装，不覆盖用户规则。
-3. 用户级配置使用 python install.py --host <codex|claude|pi> 预览，再加 --apply 执行。项目级配置按 README 的宿主说明安装，主指令与 SUBAGENTS.md 放在同一目录。
+1. 阅读 README.md、当前宿主对应的主指令与安装脚本。确认目标宿主和安装范围；无法从上下文确定时再询问。
+2. 检查已有指令、Skills、Hook 和模型配置。修改前备份，保留已有内容；统一安装器遇到指令冲突时，先检查语义冲突；可用 --merge-instructions 备份并追加受管章节，或人工合并，不覆盖用户规则。
+3. 用户级配置使用 python install.py --host <codex|claude|pi> 预览，再加 --apply 执行。项目级配置按 README 的宿主说明安装。
 4. Vault 统一使用 PROJECT_MEMORY_VAULT。启用项目记忆前确认项目名称、Vault 根目录、是否自动加载和自动收集，不猜测路径。按 project-memory Skill 填充有来源、已验证的首批记录，更新当前状态并校验；只创建空目录不算初始化完成。
-5. 不擅自切换模型或写入 API Key。Codex 检查 hooks 开关；Claude Code 重启后检查 /memory、/skills 和 /hooks；Pi 重启或 /reload 后检查 Skill 与扩展。
+5. 不擅自切换模型或写入 API Key。统一安装器自动启用 Codex hooks，再用 --doctor 检查；Claude Code 重启后检查 /memory、/skills 和 /hooks；Pi 重启或 /reload 后检查 Skill 与扩展。
 6. 报告安装位置、备份、修改、实际验证结果与待手动完成事项。用真实会话验证 Hook，不把配置文件存在当作已经生效。
 ```
 
@@ -49,7 +84,6 @@ https://github.com/fly-l/codex-agents-config.git
 ├── AGENTS.md
 ├── CLAUDE.md
 ├── PI.AGENTS.md
-├── SUBAGENTS.md
 ├── Skills/
 │   ├── project-memory/
 │   └── project-memory-maintenance/
@@ -68,7 +102,7 @@ https://github.com/fly-l/codex-agents-config.git
 └── tests/
 ```
 
-多代理职责、委派条件、写入所有权、验收和宿主模型配置统一见 [SUBAGENTS.md](SUBAGENTS.md)。指令文件不能自行切换运行时模型，安装后仍需核实实际使用的模型。
+主指令仅内联三条协作原则：明确委派边界、协调写入、核验结果。宿主支持且有帮助时可用原生子代理，具体分工由宿主决定；通用协作规则不规定模型、推理强度、委派门槛或固定角色。
 
 ## 项目记忆配置
 
@@ -131,7 +165,7 @@ python Hook/manage_installation.py sync --host <宿主> --apply
 
 ### Codex
 
-主指令默认安装到 `~/.codex/AGENTS.md`，项目级规则放在项目根目录。已有 `[features]` 时合并以下字段，不重复创建表或覆盖其他配置：
+主指令默认安装到 `~/.codex/AGENTS.md`，项目级规则放在项目根目录。统一安装器已自动启用 hooks。只有手动 / 分组件安装才需合并以下字段，不重复创建表或覆盖其他配置：
 
 ```toml
 [features]
@@ -171,56 +205,9 @@ claude doctor
 不要使用 `sudo npm install -g`。Windows 可使用 WSL，或配合 Git for Windows 运行 Claude Code。
 
 
-用户级指令为 `~/.claude/CLAUDE.md`，项目级为 `./CLAUDE.md`；Skills 分别位于 `~/.claude/skills/` 和 `./.claude/skills/`。主指令旁同时安装 `SUBAGENTS.md`。运行 `/memory`、`/skills` 检查加载结果；首次创建顶层 Skill 目录后应重启会话。
+用户级指令为 `~/.claude/CLAUDE.md`，项目级为 `./CLAUDE.md`；Skills 分别位于 `~/.claude/skills/` 和 `./.claude/skills/`。运行 `/memory`、`/skills` 检查加载结果；首次创建顶层 Skill 目录后应重启会话。
 
-#### 可选：DeepSeek 接入示例
-
-以下保留原配置示例；模型可用性和参数以安装时的服务端文档为准：
-
-| 职责 | API 标识 | 示例模型版本 |
-| --- | --- | --- |
-| 主代理 | `deepseek-v4-pro[1m]` | `DeepSeek-V4-Pro-0813` |
-| 子代理 | `deepseek-v4-flash` | `DeepSeek-V4-Flash-0731` |
-
-Linux、macOS、WSL 或 Git Bash 当前会话示例：
-
-```bash
-export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
-export ANTHROPIC_AUTH_TOKEN=<你的_DeepSeek_API_Key>
-export ANTHROPIC_MODEL=deepseek-v4-pro[1m]
-export ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro[1m]
-export ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-pro[1m]
-export ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
-export CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash
-export CLAUDE_CODE_EFFORT_LEVEL=max
-export CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432
-```
-
-PowerShell 当前会话示例：
-
-```powershell
-$env:ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"
-$env:ANTHROPIC_AUTH_TOKEN = "<你的_DeepSeek_API_Key>"
-$env:ANTHROPIC_MODEL = "deepseek-v4-pro[1m]"
-$env:ANTHROPIC_DEFAULT_OPUS_MODEL = "deepseek-v4-pro[1m]"
-$env:ANTHROPIC_DEFAULT_SONNET_MODEL = "deepseek-v4-pro[1m]"
-$env:ANTHROPIC_DEFAULT_HAIKU_MODEL = "deepseek-v4-flash"
-$env:CLAUDE_CODE_SUBAGENT_MODEL = "deepseek-v4-flash"
-$env:CLAUDE_CODE_EFFORT_LEVEL = "max"
-$env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = "786432"
-```
-
-如需强制自定义子代理、内置 Explore/Plan、teammates 和 workflow agents 都使用 Flash，可额外设置：
-
-```bash
-export CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1
-```
-
-```powershell
-$env:CLAUDE_CODE_SUBAGENT_MODEL_FORCE = "1"
-```
-
-`CLAUDE.md` 只能声明协作规则，不能自行切换运行时模型。API Key 不得提交到 Git；需要持久化时使用操作系统的安全环境变量、密钥管理器或受保护的本地配置。
+模型、供应商与子代理能力使用 Claude Code 当前宿主配置；本仓库不要求特定网关、模型标识或强制子代理设置。API Key 不得提交到 Git。
 
 #### Hook
 
@@ -258,7 +245,7 @@ pi --version
 不要使用 `sudo npm install -g`。Windows 上可直接在 PowerShell 或 Git Bash 中运行；如果 `pi` 使用自带的 bash 工具，确认 `~/.pi/agent/settings.json` 的 `shellPath` 指向可用的 shell。
 
 
-用户级把 `PI.AGENTS.md` 安装为 `~/.pi/agent/AGENTS.md`，项目级放在项目根 `AGENTS.md` 或 `AGENTS.override.md`，并在同目录放置 `SUBAGENTS.md`。项目级覆盖文件也会影响 Codex；多个宿主共用项目时应合并规则，不能用覆盖文件隔离 Pi 与 Codex。
+用户级把 `PI.AGENTS.md` 安装为 `~/.pi/agent/AGENTS.md`，项目级放在项目根 `AGENTS.md` 或 `AGENTS.override.md`。项目级覆盖文件也会影响 Codex；多个宿主共用项目时应合并规则，不能用覆盖文件隔离 Pi 与 Codex。
 
 Pi 模型由 `/model` 或 `settings.json` 的 `defaultProvider` / `defaultModel` 决定，本仓库不指定 Pi 模型。
 

@@ -260,6 +260,34 @@ class MemoryValidationTests(unittest.TestCase):
                     payload["errors"],
                 )
 
+    def test_validate_rejects_missing_superseded_by_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            vault = Path(temp) / "vault"
+            project = "反向替代关系"
+            root = self.init_vault(vault, project)
+            self.write_record(
+                root,
+                record_id="CONV-old",
+                overrides={"status": "superseded", "superseded_by": "CONV-new"},
+            )
+            replacement = self.write_record(
+                root,
+                record_id="CONV-new",
+                overrides={"supersedes": ["CONV-old"]},
+            )
+
+            valid = json.loads(self.run_store(vault, project, "validate").stdout)
+            self.assertTrue(valid["ok"])
+
+            replacement.unlink()
+            result = self.run_store(vault, project, "validate", check=False)
+            self.assertNotEqual(result.returncode, 0)
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload["ok"])
+            self.assertIn(
+                "superseded_by 目标不存在：CONV-old -> CONV-new", payload["errors"]
+            )
+
     def test_maintenance_audit_reports_invalid_record_instead_of_dropping_it(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             vault = Path(temp) / "vault"
